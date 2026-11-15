@@ -1,5 +1,5 @@
 """
-safety_db.py — SQLite schema & queries for the Tourist Safety layer.
+store.py — SQLite schema & queries for the Tourist Safety layer.
 
 Tables:
   - tourist_ids       Blockchain-anchored digital tourist IDs (no raw ID numbers stored)
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from database import DB_PATH
+from travel_buddy.core.database import DB_PATH
 
 logger = logging.getLogger(__name__)
 

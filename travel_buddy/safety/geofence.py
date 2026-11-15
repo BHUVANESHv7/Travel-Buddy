@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from tracker import haversine_distance_meters
+from travel_buddy.core.tracker import haversine_distance_meters
 
 logger = logging.getLogger(__name__)
 

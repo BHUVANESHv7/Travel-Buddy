@@ -1,5 +1,5 @@
 """
-ai_guide.py — AI-Powered Travel Guide Service using Groq LLM & DuckDuckGo Search.
+travel_guide.py — AI-Powered Travel Guide Service using Groq LLM & DuckDuckGo Search.
 
 Architecture:
 1. Web Search Engine:

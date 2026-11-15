@@ -15,6 +15,11 @@ Run this script directly to verify all Phase 3 tracking and alert mechanics:
     python simulate_live_trip.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_buddy` importable
+
 import asyncio
 import os
 import sys
@@ -24,7 +29,7 @@ import time
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from tracker import (
+from travel_buddy.core.tracker import (
     process_location_ping,
     remove_tracker,
     haversine_distance_meters,
@@ -32,9 +37,7 @@ from tracker import (
     ALERT_DISTANCE_KM_THRESHOLD,
     ARRIVAL_DISTANCE_METERS_THRESHOLD,
 )
-import database
-
-
+from travel_buddy.core import database
 # Destination: Zurich Hauptbahnhof (Zurich HB)
 DEST_LAT = 47.3781
 DEST_LNG = 8.5394

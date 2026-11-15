@@ -1,5 +1,5 @@
 """
-ai_safety.py — AI incident triage and destination safety briefings (Groq + DuckDuckGo).
+triage.py — AI incident triage and destination safety briefings (Groq + DuckDuckGo).
 
   - classify_incident(): turns a free-text report into {category, severity, advice}.
     Uses Groq in JSON mode; falls back to a keyword model when no API key / offline,
@@ -15,7 +15,7 @@ import re
 
 from groq import AsyncGroq
 
-from ai_guide import DEFAULT_GROQ_MODEL, search_travel_web, format_search_snippets
+from travel_buddy.ai.travel_guide import DEFAULT_GROQ_MODEL, search_travel_web, format_search_snippets
 
 logger = logging.getLogger(__name__)
 

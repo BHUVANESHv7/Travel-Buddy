@@ -1,12 +1,13 @@
 """
-main.py — Entry point for Travel Buddy Telegram Bot.
+main.py — Entry point for Travel Buddy (Smart Tourist Safety Monitoring & Incident Response).
 
-Features:
-  - Loads BOT_TOKEN securely from .env
-  - Inits SQLite database (users and trips tables)
-  - Registers ConversationHandler for /newtrip
-  - Registers commands: /start, /help, /mytrip, /endtrip, /canceltrip
+  - Loads configuration from .env
+  - Initialises the database, safety schema and blockchain ledger (post_init)
+  - Registers all Telegram handlers from travel_buddy.bot
+  - Starts the background safety monitor and the web command center
   - Global error handling & dual logging (console + travel_buddy.log)
+
+Run:  python main.py
 """
 
 import asyncio
@@ -29,8 +30,8 @@ from telegram.ext import (
     filters,
 )
 
-from database import init_db
-from handlers import (
+from travel_buddy.core.database import init_db
+from travel_buddy.bot.handlers import (
     start_handler,
     help_handler,
     my_trip_handler,
@@ -59,13 +60,13 @@ from handlers import (
     PREF_BUDGET,
     PREF_PACE,
 )
-import intel_handlers as ih
-import safety_handlers as sh
-import web_dashboard
-from blockchain_id import ensure_genesis
-from incident_service import admin_ids, monitor_loop
-from keyboards import QUICK_BUTTONS
-from safety_db import init_safety_db
+from travel_buddy.bot import intel_handlers as ih
+from travel_buddy.bot import safety_handlers as sh
+from travel_buddy.web import dashboard as web_dashboard
+from travel_buddy.safety.ledger import ensure_genesis
+from travel_buddy.safety.incidents import admin_ids, monitor_loop
+from travel_buddy.bot.keyboards import QUICK_BUTTONS
+from travel_buddy.safety.store import init_safety_db
 
 
 # ─────────────────────────────────────────────

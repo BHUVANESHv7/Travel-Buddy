@@ -1,5 +1,5 @@
 """
-web_dashboard.py — Web Command Center & public verification portal (Python stdlib only).
+dashboard.py — Web Command Center & public verification portal (Python stdlib only).
 
 Routes
   /                         Landing page (links to public tools)
@@ -25,10 +25,10 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-import database
-from blockchain_id import compute_identity_hash, verify_blocks
-from geofence import RISK_ORDER
-from risk_intel import HOTSPOT_DAYS, cluster_hotspots
+from travel_buddy.core import database
+from travel_buddy.safety.ledger import compute_identity_hash, verify_blocks
+from travel_buddy.safety.geofence import RISK_ORDER
+from travel_buddy.safety.risk_intel import HOTSPOT_DAYS, cluster_hotspots
 
 logger = logging.getLogger(__name__)
 

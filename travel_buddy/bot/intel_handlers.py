@@ -24,27 +24,27 @@ from html import escape
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-import safety_handlers as sh
-from ai_copilot import (
+from travel_buddy.bot import safety_handlers as sh
+from travel_buddy.ai.copilot import (
     COUNTRY_LANGUAGE, PHRASEBOOK, answer_copilot, detect_distress, phrasebook_text,
     transcribe_voice, translate_phrase,
 )
-from ai_safety import classify_incident, keyword_triage
-from blockchain_id import append_block, get_active_tourist_id
-from database import get_active_or_planning_trip, upsert_user
-from geocoding import geocode_location
-from geofence import RISK_EMOJI, highest_risk, maps_link, reverse_geocode
-from incident_service import forward_media, is_admin, raise_incident, TYPE_LABEL, SEVERITY_EMOJI
-from risk_intel import (
+from travel_buddy.ai.triage import classify_incident, keyword_triage
+from travel_buddy.safety.ledger import append_block, get_active_tourist_id
+from travel_buddy.core.database import get_active_or_planning_trip, upsert_user
+from travel_buddy.core.geocoding import geocode_location
+from travel_buddy.safety.geofence import RISK_EMOJI, highest_risk, maps_link, reverse_geocode
+from travel_buddy.safety.incidents import forward_media, is_admin, raise_incident, TYPE_LABEL, SEVERITY_EMOJI
+from travel_buddy.safety.risk_intel import (
     HOTSPOT_WARN_M, assess_route, directions_link, fetch_route, get_hotspots,
     get_weather_risk, hotspots_near,
 )
-from safety_db import (
+from travel_buddy.safety.store import (
     add_evidence, get_active_zones, get_open_user_incidents, get_safety_state,
     update_safety_state,
 )
-from safety_monitor import approx_local_hour
-from web_dashboard import dashboard_token, public_base_url
+from travel_buddy.safety.monitor import approx_local_hour
+from travel_buddy.web.dashboard import dashboard_token, public_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +126,8 @@ async def build_live_context(uid: int) -> dict:
 
 
 async def _score_with_intel(uid, state, inside, weather, hot_risk) -> dict:
-    from safety_monitor import compute_safety_score, recent_anomaly_count
-    from safety_db import get_guardians
+    from travel_buddy.safety.monitor import compute_safety_score, recent_anomaly_count
+    from travel_buddy.safety.store import get_guardians
     return compute_safety_score(
         zone_risk=highest_risk(inside),
         local_hour=_local_hour(weather, state["last_lng"]),

@@ -1,5 +1,5 @@
 """
-safety_monitor.py — Behavioural anomaly detection & safety scoring.
+monitor.py — Behavioural anomaly detection & safety scoring.
 
 Anomalies (evaluated on every location ping during an active trip):
   - ABRUPT_HALT      Was moving fast (>= 50 km/h) and suddenly became stationary for 3+ min,
@@ -8,7 +8,7 @@ Anomalies (evaluated on every location ping during an active trip):
   - ROUTE_DEVIATION  Distance to destination keeps growing (2+ km) before the stop was reached.
 
 Inactivity (signal lost) and safety timers are handled by the background loop in
-incident_service.py, which uses the same check-in mechanism.
+incidents.py, which uses the same check-in mechanism.
 
 Safety score (0–100) blends zone risk, time of day, open incidents, recent anomalies,
 pending check-ins and preparedness (digital ID + guardian).
@@ -19,7 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from tracker import haversine_distance_meters
+from travel_buddy.core.tracker import haversine_distance_meters
 
 STOP_RADIUS_M = 100.0
 ABRUPT_HALT_MIN_SPEED_KMH = 50.0

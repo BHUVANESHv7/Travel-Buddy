@@ -1,9 +1,12 @@
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_buddy` importable
+
 import asyncio
 import os
-import database
-import geocoding
-
-
+from travel_buddy.core import database
+from travel_buddy.core import geocoding
 async def test_all():
     if os.path.exists("travel_bot.db"):
         os.remove("travel_bot.db")

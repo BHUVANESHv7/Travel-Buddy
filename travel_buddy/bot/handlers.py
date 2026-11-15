@@ -18,7 +18,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-from database import (
+from travel_buddy.core.database import (
     upsert_user,
     get_active_or_planning_trip,
     create_trip,
@@ -29,22 +29,22 @@ from database import (
     get_user_preferences,
     save_user_preferences,
 )
-from geocoding import geocode_location
-from tracker import (
+from travel_buddy.core.geocoding import geocode_location
+from travel_buddy.core.tracker import (
     process_location_ping,
     remove_tracker,
     _active_trackers,
     calculate_eta_minutes,
     haversine_distance_meters,
 )
-from ai_guide import generate_travel_guide
-from keyboards import MAIN_KEYBOARD
-from safety_handlers import (
+from travel_buddy.ai.travel_guide import generate_travel_guide
+from travel_buddy.bot.keyboards import MAIN_KEYBOARD
+from travel_buddy.bot.safety_handlers import (
     handle_guardian_deeplink,
     safety_location_hook,
     location_snapshot_reply,
 )
-from safety_monitor import reset_motion
+from travel_buddy.safety.monitor import reset_motion
 
 logger = logging.getLogger(__name__)
 

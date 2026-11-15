@@ -1,5 +1,5 @@
 """
-incident_service.py — Incident creation, responder notifications, check-ins & background monitor.
+incidents.py — Incident creation, responder notifications, check-ins & background monitor.
 
 Responders:
   - Guardians: emergency contacts who linked themselves via a /addguardian invite link.
@@ -21,15 +21,15 @@ from html import escape
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
-from blockchain_id import append_block, get_active_tourist_id
-from database import get_active_or_planning_trip, get_user
-from geofence import maps_link
-from risk_intel import get_weather_risk, invalidate_hotspots
-from safety_db import (
+from travel_buddy.safety.ledger import append_block, get_active_tourist_id
+from travel_buddy.core.database import get_active_or_planning_trip, get_user
+from travel_buddy.safety.geofence import maps_link
+from travel_buddy.safety.risk_intel import get_weather_risk, invalidate_hotspots
+from travel_buddy.safety.store import (
     create_incident, get_all_safety_states, get_incident, get_linked_guardian_ids,
     get_users_seen_near, set_incident_block_hash, update_safety_state,
 )
-from tracker import haversine_distance_meters
+from travel_buddy.core.tracker import haversine_distance_meters
 
 logger = logging.getLogger(__name__)
 

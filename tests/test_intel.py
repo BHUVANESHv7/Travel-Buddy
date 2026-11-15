@@ -8,6 +8,11 @@ sealing, QR generation and the web portal (public pages + token-protected comman
 Run:  .\\venv\\Scripts\\python test_intel.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_buddy` importable
+
 import asyncio
 import json
 import os
@@ -25,19 +30,18 @@ os.environ["ADMIN_IDS"] = "9001"
 os.environ["GROQ_API_KEY"] = ""
 os.environ["DASHBOARD_TOKEN"] = "test-token-123"
 
-import blockchain_id
-import database
-import safety_db
-
+from travel_buddy.safety import ledger as blockchain_id
+from travel_buddy.core import database
+from travel_buddy.safety import store as safety_db
 TMP_DB = os.path.join(tempfile.mkdtemp(), "intel_test.db")
 for mod in (database, safety_db, blockchain_id):
     mod.DB_PATH = TMP_DB
 
-import incident_service
-import web_dashboard
-from ai_copilot import detect_distress, phrasebook_text
-from intel_handlers import make_qr_png, _seal_evidence
-from risk_intel import assess_route, assess_weather, cluster_hotspots, hotspots_near
+from travel_buddy.safety import incidents as incident_service
+from travel_buddy.web import dashboard as web_dashboard
+from travel_buddy.ai.copilot import detect_distress, phrasebook_text
+from travel_buddy.bot.intel_handlers import make_qr_png, _seal_evidence
+from travel_buddy.safety.risk_intel import assess_route, assess_weather, cluster_hotspots, hotspots_near
 
 TOURIST, NEIGHBOUR, FAR_USER, ADMIN = 1001, 1002, 1003, 9001
 
@@ -205,7 +209,7 @@ async def test_evidence_qr_and_web():
 async def test_wiring():
     import importlib
     importlib.import_module("main")
-    importlib.import_module("intel_handlers")
+    importlib.import_module("travel_buddy.bot.intel_handlers")
     ok("Bot modules import cleanly")
 
 

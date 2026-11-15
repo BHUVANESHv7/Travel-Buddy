@@ -4,13 +4,18 @@ Handles all DB operations: initialisation, users, and trips management.
 Includes status synchronization and alert tracking for Phase 3 live tracking.
 """
 
-import aiosqlite
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
+
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = "travel_bot.db"
+# Stored in the project root by default; override with DATABASE_PATH in .env
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = os.getenv("DATABASE_PATH", str(PROJECT_ROOT / "travel_bot.db"))
 
 
 async def init_db() -> None:

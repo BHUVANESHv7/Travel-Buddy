@@ -1,5 +1,5 @@
 """
-blockchain_id.py — Blockchain-based Digital Tourist ID & tamper-evident audit ledger.
+ledger.py — Blockchain-based Digital Tourist ID & tamper-evident audit ledger.
 
 How it works:
   - Every important safety event (ID issued/revoked, SOS, incident reported/resolved) is
@@ -22,8 +22,8 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from database import DB_PATH
-from safety_db import _fetchone, _fetchall, _execute, now_iso
+from travel_buddy.core.database import DB_PATH
+from travel_buddy.safety.store import _fetchone, _fetchall, _execute, now_iso
 
 logger = logging.getLogger(__name__)
 

@@ -1,16 +1,25 @@
 """
-test_phase4.py — Test suite for Phase 4: User Preferences, DuckDuckGo Search, and AI Travel Guide.
+test_ai_guide.py — Test suite for the AI travel guide: User Preferences, DuckDuckGo Search, and AI Travel Guide.
 """
+
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_buddy` importable
 
 import asyncio
 import os
 import sys
+import tempfile
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-import database
-from ai_guide import (
+from travel_buddy.core import database
+
+# Isolated database so the test is repeatable and never touches real data
+database.DB_PATH = os.path.join(tempfile.mkdtemp(), "ai_guide_test.db")
+from travel_buddy.ai.travel_guide import (
     search_travel_web,
     format_search_snippets,
     TRAVEL_GUIDE_SYSTEM_PROMPT,

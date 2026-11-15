@@ -8,6 +8,11 @@ background check-in / escalation monitor.
 Run:  .\\venv\\Scripts\\python test_safety.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_buddy` importable
+
 import asyncio
 import os
 import sys
@@ -22,18 +27,17 @@ os.environ["GROQ_API_KEY"] = ""  # force offline rule-based triage
 
 import aiosqlite
 
-import blockchain_id
-import database
-import safety_db
-
+from travel_buddy.safety import ledger as blockchain_id
+from travel_buddy.core import database
+from travel_buddy.safety import store as safety_db
 TMP_DB = os.path.join(tempfile.mkdtemp(), "safety_test.db")
 for mod in (database, safety_db, blockchain_id):
     mod.DB_PATH = TMP_DB
 
-import incident_service
-from ai_safety import keyword_triage
-from geofence import evaluate_geofence
-from safety_monitor import analyze_motion, compute_safety_score, reset_motion
+from travel_buddy.safety import incidents as incident_service
+from travel_buddy.ai.triage import keyword_triage
+from travel_buddy.safety.geofence import evaluate_geofence
+from travel_buddy.safety.monitor import analyze_motion, compute_safety_score, reset_motion
 
 TOURIST, GUARDIAN, ADMIN = 1001, 2002, 9001
 
@@ -227,7 +231,7 @@ async def test_incidents_and_monitor():
 
 async def test_wiring():
     __import__("main")
-    __import__("safety_handlers")
+    __import__("travel_buddy.bot.safety_handlers")
     ok("Bot modules import cleanly")
 
 

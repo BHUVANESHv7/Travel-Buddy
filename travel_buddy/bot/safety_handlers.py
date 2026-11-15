@@ -20,30 +20,30 @@ from html import escape
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
 
-from ai_safety import classify_incident, generate_safety_briefing
-from blockchain_id import (
+from travel_buddy.ai.triage import classify_incident, generate_safety_briefing
+from travel_buddy.safety.ledger import (
     get_active_tourist_id, get_recent_blocks, issue_tourist_id, mask_doc,
     revoke_tourist_id, verify_chain, verify_tourist_id, get_tourist_id,
 )
-from database import get_active_or_planning_trip, upsert_user
-from geofence import (
+from travel_buddy.core.database import get_active_or_planning_trip, upsert_user
+from travel_buddy.safety.geofence import (
     RISK_EMOJI, emergency_numbers_for, evaluate_geofence, find_nearby_services,
     highest_risk, maps_link, reverse_geocode, zones_near, SERVICE_LABELS, RISK_ORDER,
 )
-from incident_service import (
+from travel_buddy.safety.incidents import (
     TYPE_LABEL, SEVERITY_EMOJI, is_admin, notify_responders, raise_incident,
     send_checkin, tourist_label,
 )
-from keyboards import BTN_MYID, BTN_NEARBY, BTN_SAFETY, BTN_SOS, MAIN_KEYBOARD
-from safety_db import (
+from travel_buddy.bot.keyboards import BTN_MYID, BTN_NEARBY, BTN_SAFETY, BTN_SOS, MAIN_KEYBOARD
+from travel_buddy.safety.store import (
     _fetchall, _fetchone, acknowledge_incident, add_zone, create_guardian_invite,
     deactivate_zone, get_active_zones, get_guardians, get_incident, get_location_history,
     get_open_incidents, get_open_user_incidents, get_safety_state, get_tourists_guarded_by,
     get_user_incidents, is_guardian_of, link_guardian, record_location, remove_guardian,
     resolve_incident, set_incident_location, update_safety_state,
 )
-from blockchain_id import append_block
-from safety_monitor import (
+from travel_buddy.safety.ledger import append_block
+from travel_buddy.safety.monitor import (
     analyze_motion, approx_local_hour, compute_safety_score, recent_anomaly_count, reset_motion,
 )
 
@@ -195,7 +195,7 @@ async def reg_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Next: add an emergency contact who gets your alerts → /addguardian",
         parse_mode="HTML",
     )
-    from intel_handlers import send_id_qr
+    from travel_buddy.bot.intel_handlers import send_id_qr
     await send_id_qr(update, record)
     return ConversationHandler.END
 
@@ -233,7 +233,7 @@ async def myid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     check = await verify_tourist_id(record["tourist_id"])
     verdict = "✅ Verified on ledger" if check["valid"] else "⚠️ " + "; ".join(check["reasons"])
     await update.effective_message.reply_html(_id_card(record) + f"\n\n<b>Verification:</b> {verdict}")
-    from intel_handlers import send_id_qr
+    from travel_buddy.bot.intel_handlers import send_id_qr
     await send_id_qr(update, record)
 
 
@@ -429,7 +429,7 @@ async def safety_location_hook(update: Update, context: ContextTypes.DEFAULT_TYP
             await send_checkin(context.bot, user_id, anomaly.kind, anomaly.message)
 
     # ── Self-learning hotspots: warn when walking into an incident cluster ──
-    from intel_handlers import hotspot_location_hook
+    from travel_buddy.bot.intel_handlers import hotspot_location_hook
     await hotspot_location_hook(update, user_id, lat, lng)
 
 
@@ -475,7 +475,7 @@ async def safety_status_handler(update: Update, context: ContextTypes.DEFAULT_TY
     state = await get_safety_state(user.id)
     zones = await get_active_zones()
     inside = [z for z in zones if z["zone_id"] in state["zone_state"]["inside"]]
-    from intel_handlers import build_live_context
+    from travel_buddy.bot.intel_handlers import build_live_context
     live = await build_live_context(user.id)  # adds weather + learned hotspots to the score
     score = live["_score"]
     tid = await get_active_tourist_id(user.id)
@@ -835,7 +835,7 @@ async def efir_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     name, tid, rec = await tourist_label(inc["telegram_id"])
     trail = await get_location_history(inc["telegram_id"], 8)
-    from safety_db import get_evidence
+    from travel_buddy.safety.store import get_evidence
     evidence_rows = await get_evidence(inc["incident_id"])
     place = ""
     if inc["lat"] is not None:

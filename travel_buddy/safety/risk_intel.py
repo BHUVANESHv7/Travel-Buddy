@@ -21,8 +21,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from geofence import RISK_ORDER, distance_to_zone_edge
-from tracker import haversine_distance_meters
+from travel_buddy.safety.geofence import RISK_ORDER, distance_to_zone_edge
+from travel_buddy.core.tracker import haversine_distance_meters
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ HOTSPOT_CACHE_S = 300
 
 
 async def get_hotspots(force: bool = False) -> list[dict]:
-    from safety_db import get_incidents_with_location  # local import avoids cycles
+    from travel_buddy.safety.store import get_incidents_with_location  # local import avoids cycles
     if not force and time.time() - _hotspot_cache["ts"] < HOTSPOT_CACHE_S:
         return _hotspot_cache["data"]
     since = (datetime.now(timezone.utc) - timedelta(days=HOTSPOT_DAYS)).isoformat()

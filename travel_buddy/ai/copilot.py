@@ -1,5 +1,5 @@
 """
-ai_copilot.py — Context-aware AI Safety Copilot, voice understanding and emergency phrasebook.
+copilot.py — Context-aware AI Safety Copilot, voice understanding and emergency phrasebook.
 
   - answer_copilot(): the tourist just chats ("is it safe to walk to the fort now?") and the
     copilot answers using their LIVE situation: place, zone, safety score, weather hazards,
@@ -15,8 +15,8 @@ import re
 
 from groq import AsyncGroq
 
-from ai_guide import DEFAULT_GROQ_MODEL
-from ai_safety import _groq_key
+from travel_buddy.ai.travel_guide import DEFAULT_GROQ_MODEL
+from travel_buddy.ai.triage import _groq_key
 
 logger = logging.getLogger(__name__)
 
