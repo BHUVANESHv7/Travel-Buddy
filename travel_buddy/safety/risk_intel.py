@@ -23,10 +23,10 @@ import httpx
 
 from travel_buddy.safety.geofence import RISK_ORDER, distance_to_zone_edge
 from travel_buddy.core.tracker import haversine_distance_meters
+from travel_buddy.core.usage import USER_AGENT, try_consume
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "TravelBuddyTelegramBot/1.0 (https://github.com/travelbuddy)"
 
 HOTSPOT_DAYS = 30
 HOTSPOT_EPS_M = 500.0       # neighbourhood radius for clustering
@@ -204,6 +204,8 @@ async def get_weather_risk(lat: float, lng: float) -> dict | None:
         "hourly": "precipitation,weather_code,wind_gusts_10m,temperature_2m",
         "forecast_hours": 6, "timezone": "auto",
     }
+    if not try_consume("weather"):  # stay inside Open-Meteo's free daily allowance
+        return None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(OPEN_METEO_URL, params=params, headers={"User-Agent": USER_AGENT})
@@ -238,6 +240,8 @@ async def fetch_route(a_lat: float, a_lng: float, b_lat: float, b_lng: float) ->
     """Road route via OSRM; falls back to the straight line."""
     url = OSRM_URL.format(a_lat=a_lat, a_lng=a_lng, b_lat=b_lat, b_lng=b_lng)
     try:
+        if not try_consume("routing"):  # free public OSRM server: light use only
+            raise RuntimeError("daily routing cap reached")
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(url, params={"overview": "full", "geometries": "geojson"},
                                  headers={"User-Agent": USER_AGENT})

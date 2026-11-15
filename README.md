@@ -31,6 +31,7 @@ A Telegram travel companion that keeps tourists safe in real time. It tracks jou
 - [Tech stack](#-tech-stack)
 - [Project structure](#-project-structure)
 - [Quick start](#-quick-start)
+- [Running cost: ₹0](#-running-cost-0)
 - [Configuration](#%EF%B8%8F-configuration)
 - [Command reference](#-command-reference)
 - [Web portal](#-web-portal)
@@ -154,6 +155,30 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the package layout, seq
 
 ---
 
+## 💸 Running cost: ₹0
+
+Everything Travel Buddy uses is free, and the bot has built-in guards so it **cannot** run past a free tier.
+
+| Service | Used for | Price | Free-tier guard in the bot |
+|---|---|---|---|
+| Telegram Bot API | Messaging, files, location | Free | — |
+| OpenStreetMap Nominatim | Addresses, place search | Free (fair use) | Max 1 request/second, results cached 1–7 days |
+| OpenStreetMap Overpass | Nearest police, hospitals, pharmacies | Free (fair use) | 10 s budget, mirrors, Nominatim fallback, 6 h cache, `PLACES_DAILY_LIMIT` |
+| OpenStreetMap tiles + Leaflet | Web command-center map | Free | Loaded by the browser only when the map is open |
+| Open-Meteo | Weather hazards | Free for non-commercial use (<10,000 calls/day) | 15 min cache, `WEATHER_DAILY_LIMIT` = 5,000 |
+| OSRM demo server | `/saferoute` road routes | Free (light use) | `ROUTING_DAILY_LIMIT` = 500, straight-line fallback |
+| DuckDuckGo | Web search for the AI guide | Free | — |
+| Groq (optional) | AI copilot, triage, voice, guide | **Free tier, no card required** | `AI_DAILY_LIMIT` = 300; then offline mode until tomorrow |
+| Python packages | — | Open source | — |
+| Hosting | Your own PC | Free | — |
+
+- **Groq can only charge you if you add a payment method to your Groq account.** Don't add one and it stays free forever. Without any key, all AI features use their offline fallbacks.
+- When a daily cap is reached, that feature quietly switches to its offline mode until 00:00 UTC. **SOS, geo-fencing, check-ins, guardians and the ledger never stop.**
+- Admins can check today's usage against every cap with **`/usage`** in the bot.
+- *Going commercial?* Open-Meteo needs a paid licence for commercial use, and heavy production use should run its own OSRM/Nominatim servers (both are free, open-source software).
+
+---
+
 ## 📁 Project structure
 
 ```
@@ -255,6 +280,8 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `DASHBOARD_TOKEN` | | random | Secret for the command center (a random one is sent to admins at start-up if unset) |
 | `PUBLIC_BASE_URL` | | `http://localhost:8080` | Public URL used in QR codes (e.g. an ngrok or server URL) |
 | `DATABASE_PATH` | | `./travel_bot.db` | SQLite database location |
+| `AI_DAILY_LIMIT` | | `300` | Max Groq AI calls per day (then offline mode) |
+| `WEATHER_DAILY_LIMIT` · `ROUTING_DAILY_LIMIT` · `PLACES_DAILY_LIMIT` | | `5000` · `500` · `2000` | Daily caps for the other free services |
 
 ---
 
@@ -352,6 +379,7 @@ python tests/test_intel.py          # hotspots, weather, safe routes, distress d
 python tests/test_trips.py          # trip lifecycle & state transitions
 python tests/simulate_live_trip.py  # live GPS simulation: alerts, arrival, overshoot
 python tests/test_ai_guide.py       # preferences + web search grounding (needs internet)
+python tests/test_costs.py          # zero-cost guards: daily caps, AI fallback, rate limits, caches
 python tests/live_check.py          # LIVE end-to-end run through the real Telegram API (see below)
 ```
 

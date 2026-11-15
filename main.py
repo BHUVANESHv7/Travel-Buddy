@@ -303,6 +303,7 @@ def build_application(token: str) -> Application:
         "phrases": ih.phrases_handler,
         "community": ih.community_handler,
         "web": ih.web_handler,
+        "usage": ih.usage_handler,
     })
     for name, handler in safety_commands.items():
         app.add_handler(CommandHandler(name, handler))

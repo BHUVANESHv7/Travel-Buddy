@@ -32,6 +32,8 @@ except ImportError:
 
 from groq import AsyncGroq
 
+from travel_buddy.core.usage import try_consume
+
 logger = logging.getLogger(__name__)
 
 # Default fast and capable model on Groq
@@ -141,13 +143,16 @@ async def generate_travel_guide(
     """
     # 1. Verify Groq API Key
     groq_key = api_key or os.getenv("GROQ_API_KEY")
-    if not groq_key or groq_key == "your_groq_api_key_here":
+    if not groq_key or groq_key.startswith("gsk_your") or groq_key == "your_groq_api_key_here":
         return (
             "⚠️ <b>Groq API Key Not Configured</b>\n\n"
             "To use the AI travel guide, please add your Groq API key to the <code>.env</code> file:\n"
             "<code>GROQ_API_KEY=gsk_your_key_here</code>\n\n"
-            "You can get a free key from <a href='https://console.groq.com/'>console.groq.com</a>."
+            "You can get a free key (no card needed) from <a href='https://console.groq.com/'>console.groq.com</a>."
         )
+    if not try_consume("ai"):
+        return ("⏳ <b>Daily free AI limit reached</b>\n\nThe AI travel guide is resting until tomorrow so the "
+                "service stays completely free. All safety features keep working.")
 
     # 2. Refine search query with destination context if applicable
     search_query = user_query.strip()

@@ -15,6 +15,8 @@ import re
 
 from groq import AsyncGroq
 
+from travel_buddy.core.usage import try_consume
+
 from travel_buddy.ai.travel_guide import DEFAULT_GROQ_MODEL, search_travel_web, format_search_snippets
 
 logger = logging.getLogger(__name__)
@@ -61,8 +63,14 @@ If in doubt, choose the higher severity.""" % (CATEGORIES, SEVERITIES)
 
 
 def _groq_key() -> str | None:
+    """Groq key for ONE upcoming AI call, or None → use the free offline fallback.
+
+    Returns None when no key is configured or today's free-tier cap (AI_DAILY_LIMIT) is used up,
+    so the bot can never run past Groq's free limits."""
     key = os.getenv("GROQ_API_KEY")
     if not key or key.startswith("gsk_your") or key == "your_groq_api_key_here":
+        return None
+    if not try_consume("ai"):
         return None
     return key
 

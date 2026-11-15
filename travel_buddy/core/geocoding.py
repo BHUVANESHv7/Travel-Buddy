@@ -14,12 +14,15 @@ The bot supports BOTH:
 """
 
 import logging
+
 import httpx
+
+from travel_buddy.core.usage import USER_AGENT, TTLCache, nominatim_slot
 
 logger = logging.getLogger(__name__)
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "TravelBuddyTelegramBot/1.0 (https://github.com/travelbuddy)"
+_cache = TTLCache(ttl_s=7 * 86400)  # places don't move — avoid repeat lookups (free-tier friendly)
 
 
 async def geocode_location(query: str) -> tuple[float, float, str] | None:
@@ -38,7 +41,13 @@ async def geocode_location(query: str) -> tuple[float, float, str] | None:
         "Accept-Language": "en",
     }
 
+    key = query.strip().lower()
+    cached = _cache.get(key)
+    if cached:
+        return cached
+
     try:
+        await nominatim_slot()  # OpenStreetMap policy: max 1 request per second
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(NOMINATIM_URL, params=params, headers=headers)
             response.raise_for_status()
@@ -50,6 +59,7 @@ async def geocode_location(query: str) -> tuple[float, float, str] | None:
                 lng = float(best_match["lon"])
                 display_name = best_match.get("display_name", query)
                 logger.info("Geocoded '%s' → (%s, %s): %s", query, lat, lng, display_name)
+                _cache.set(key, (lat, lng, display_name))
                 return lat, lng, display_name
 
             logger.warning("No geocoding results found for query: '%s'", query)

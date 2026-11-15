@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import httpx
 
 from travel_buddy.core.tracker import haversine_distance_meters
+from travel_buddy.core.usage import USER_AGENT, TTLCache, nominatim_slot, try_consume
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,6 @@ OVERPASS_MIRRORS = [OVERPASS_URL, "https://overpass.private.coffee/api/interpret
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_BUDGET_S = 10.0  # total time allowed for Overpass before falling back to Nominatim
-USER_AGENT = "TravelBuddyTelegramBot/1.0 (https://github.com/travelbuddy)"
 
 RISK_ORDER = {"safe": 0, "caution": 1, "high": 2, "restricted": 3}
 RISK_EMOJI = {"safe": "🟢", "caution": "🟡", "high": "🟠", "restricted": "🔴"}
@@ -126,19 +126,31 @@ def emergency_numbers_for(country_code: str | None) -> dict:
     return EMERGENCY_NUMBERS.get(country_code.lower(), DEFAULT_EMERGENCY)
 
 
+_reverse_cache = TTLCache(ttl_s=24 * 3600)
+_services_cache = TTLCache(ttl_s=6 * 3600, max_items=500)
+SERVICES_CACHE_RADIUS_M = 1000.0  # reuse a nearby-services lookup made within 1 km
+
+
 async def reverse_geocode(lat: float, lng: float) -> dict | None:
     """Return {'display_name', 'country_code'} for a coordinate, or None."""
+    key = (round(lat, 3), round(lng, 3))  # ~100 m grid
+    cached = _reverse_cache.get(key)
+    if cached:
+        return cached
     params = {"lat": lat, "lon": lng, "format": "json", "zoom": 14}
     try:
+        await nominatim_slot()  # OpenStreetMap policy: max 1 request per second
         async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.get(NOMINATIM_REVERSE_URL, params=params,
                                  headers={"User-Agent": USER_AGENT, "Accept-Language": "en"})
             r.raise_for_status()
             data = r.json()
-            return {
+            result = {
                 "display_name": data.get("display_name", ""),
                 "country_code": (data.get("address") or {}).get("country_code"),
             }
+            _reverse_cache.set(key, result)
+            return result
     except Exception as exc:
         logger.warning("Reverse geocoding failed for (%s, %s): %s", lat, lng, exc)
         return None
@@ -159,7 +171,16 @@ SERVICE_LABELS = {
 
 async def find_nearby_services(lat: float, lng: float, radius_m: int = 5000,
                                per_type: int = 2) -> list[dict]:
-    """Return the closest emergency services, sorted by distance."""
+    """Return the closest emergency services, sorted by distance (cached ~1 km grid, 6 h)."""
+    cache_key = (lat, lng, radius_m, per_type)
+    cached = next((v for (c_lat, c_lng, c_r, c_n), v in _services_cache.items()
+                   if c_r == radius_m and c_n == per_type
+                   and haversine_distance_meters(lat, lng, c_lat, c_lng) <= SERVICES_CACHE_RADIUS_M), None)
+    if cached is not None:  # a lookup within 1 km: same places, distances recomputed from here
+        fresh = [{**c, "distance_m": haversine_distance_meters(lat, lng, c["lat"], c["lng"])} for c in cached]
+        return sorted(fresh, key=lambda x: x["distance_m"])
+    if not try_consume("places"):
+        return []
     amenities = "|".join(SERVICE_LABELS)
     query = (
         f'[out:json][timeout:15];'
@@ -185,7 +206,10 @@ async def find_nearby_services(lat: float, lng: float, radius_m: int = 5000,
         logger.warning("Overpass took longer than %ss; using Nominatim fallback.", OVERPASS_BUDGET_S)
         elements = None
     if not elements:
-        return await _nominatim_services(lat, lng, radius_m, per_type)
+        fallback = await _nominatim_services(lat, lng, radius_m, per_type)
+        if fallback:
+            _services_cache.set(cache_key, fallback)
+        return fallback
 
     results = []
     for el in elements:
@@ -209,6 +233,8 @@ async def find_nearby_services(lat: float, lng: float, radius_m: int = 5000,
         if counts.get(item["type"], 0) < per_type:
             picked.append(item)
             counts[item["type"]] = counts.get(item["type"], 0) + 1
+    if picked:
+        _services_cache.set(cache_key, picked)
     return picked
 
 
@@ -219,9 +245,8 @@ async def _nominatim_services(lat: float, lng: float, radius_m: int, per_type: i
     picked: list[dict] = []
     async with httpx.AsyncClient(timeout=8.0) as client:
         for i, kind in enumerate(("police", "hospital", "pharmacy")):
-            if i:
-                await asyncio.sleep(1.0)  # Nominatim usage policy: max 1 request per second
             try:
+                await nominatim_slot()  # Nominatim usage policy: max 1 request per second
                 r = await client.get(NOMINATIM_SEARCH_URL, params={
                     "q": kind, "format": "jsonv2", "limit": 6, "viewbox": viewbox, "bounded": 1,
                 }, headers={"User-Agent": USER_AGENT, "Accept-Language": "en"})

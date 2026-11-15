@@ -151,7 +151,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/community on|off — Anonymous alerts about incidents near you\n"
         "/web — Public verification portal (admins: live command-center map)\n\n"
         "🖥️ <b>Safety desk (admins)</b>\n"
-        "/dashboard · /incidents all · /addzone · /removezone · /whereis TID\n\n"
+        "/dashboard · /usage · /incidents all · /addzone · /removezone · /whereis TID\n\n"
         "ℹ️ <b>General</b>\n"
         "/start      — Start bot & register account\n"
         "/help       — Show this command guide\n\n"

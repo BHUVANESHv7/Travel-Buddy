@@ -540,3 +540,31 @@ async def hotspot_location_hook(update: Update, uid: int, lat: float, lng: float
     if changed:
         warned = {k: v for k, v in warned.items() if now - v < 86400}
         await update_safety_state(uid, hotspot_alerts=json.dumps(warned))
+
+
+# ═════════════════════════════════════════════
+#  💸 Free-tier usage (admins)
+# ═════════════════════════════════════════════
+
+USAGE_LABELS = {
+    "ai": ("🤖 AI (Groq)", "copilot, triage, voice, guide"),
+    "weather": ("🌦️ Weather (Open-Meteo)", "alerts, /weather, routes"),
+    "routing": ("🧭 Routing (OSRM)", "/saferoute"),
+    "places": ("🏥 Places (OpenStreetMap)", "/nearby, SOS"),
+}
+
+
+async def usage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from travel_buddy.core.usage import usage_report
+    if not is_admin(update.effective_user.id):
+        await update.effective_message.reply_text("⛔ Only the safety desk can view usage.")
+        return
+    lines = ["💸 <b>Today's free-tier usage</b> (resets 00:00 UTC)", ""]
+    for service, used, limit in usage_report():
+        label, what = USAGE_LABELS.get(service, (service, ""))
+        pct = int(used * 100 / limit) if limit else 0
+        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+        lines.append(f"{label}\n<code>{bar}</code> {used}/{limit} · <i>{what}</i>")
+    lines += ["", "Running cost: <b>₹0</b>. When a cap is reached the feature switches to its free offline "
+              "mode until tomorrow; safety alerts, SOS, geo-fencing and the ledger never stop."]
+    await update.effective_message.reply_html("\n".join(lines))
