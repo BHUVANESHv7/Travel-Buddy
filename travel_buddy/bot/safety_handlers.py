@@ -182,18 +182,19 @@ async def reg_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return REG_DAYS
 
     reg = context.user_data.pop("reg", {})
-    status = await update.message.reply_html("⛏️ <i>Mining your ID block on the safety ledger…</i>", reply_markup=MAIN_KEYBOARD)
+    # No reply keyboard on a progress message: Telegram refuses to edit/replace those.
+    status = await update.message.reply_html("⛏️ <i>Mining your ID block on the safety ledger…</i>")
     record = await issue_tourist_id(
         telegram_id=update.effective_user.id,
         full_name=reg["full_name"], nationality=reg["nationality"], doc_type=reg["doc_type"],
         doc_number=reg["doc_number"], emergency_name=reg["emergency_name"],
         emergency_phone=reg["emergency_phone"], valid_days=days,
     )
-    await status.edit_text(
+    await _replace_status(
+        update, status,
         "✅ <b>Digital Tourist ID issued!</b>\n\n" + _id_card(record) +
         "\n\n💡 Anyone can verify it with <code>/verifyid " + record["tourist_id"] + "</code>.\n"
         "Next: add an emergency contact who gets your alerts → /addguardian",
-        parse_mode="HTML",
     )
     from travel_buddy.bot.intel_handlers import send_id_qr
     await send_id_qr(update, record)
@@ -745,7 +746,7 @@ async def report_location_text(update: Update, context: ContextTypes.DEFAULT_TYP
 async def _finish_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
                          lat: float | None, lng: float | None) -> int:
     report = context.user_data.pop("report", {})
-    status = await update.effective_message.reply_html("🤖 <i>AI is triaging your report…</i>", reply_markup=MAIN_KEYBOARD)
+    status = await update.effective_message.reply_html("🤖 <i>AI is triaging your report…</i>")
     triage = await classify_incident(report.get("description", ""), report.get("type"))
     incident = await raise_incident(
         context.bot, update.effective_user.id, triage["category"], triage["severity"],
@@ -754,7 +755,8 @@ async def _finish_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
     who = (f"{incident['delivered']} responder(s) alerted." if incident["delivered"]
            else "Logged (low severity — responders not paged)." if triage["severity"] == "low"
            else "No guardian/safety desk linked to alert — /addguardian.")
-    await status.edit_text(
+    await _replace_status(
+        update, status,
         f"✅ <b>Incident #{incident['incident_id']} recorded</b>\n\n"
         f"<b>Type:</b> {TYPE_LABEL.get(triage['category'], triage['category'])}\n"
         f"<b>Severity:</b> {SEVERITY_EMOJI[triage['severity']]} {triage['severity'].upper()} "
@@ -764,9 +766,18 @@ async def _finish_report(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"💡 <b>What to do now:</b>\n{escape(triage['advice'])}\n\n"
         f"📄 Need a police report? → <code>/efir {incident['incident_id']}</code>\n"
         + ("🚨 <b>If anyone is in danger, press /sos now.</b>" if triage["severity"] in ("high", "critical") else ""),
-        parse_mode="HTML",
     )
     return ConversationHandler.END
+
+
+async def _replace_status(update: Update, status, text: str) -> None:
+    """Swap a temporary 'working…' message for the final result and restore the SOS keyboard.
+    (Telegram can't attach a reply keyboard to an edited message, so we delete and resend.)"""
+    try:
+        await status.delete()
+    except Exception:
+        pass
+    await update.effective_message.reply_html(text, reply_markup=MAIN_KEYBOARD, disable_web_page_preview=True)
 
 
 async def incidents_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

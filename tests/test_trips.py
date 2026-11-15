@@ -6,11 +6,13 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_b
 import asyncio
 import os
 from travel_buddy.core import database
+
+# Isolated database so the test is repeatable and never touches real data
+import tempfile as _tempfile
+database.DB_PATH = os.path.join(_tempfile.mkdtemp(), "test.db")
 from travel_buddy.core import geocoding
 async def test_all():
-    if os.path.exists("travel_bot.db"):
-        os.remove("travel_bot.db")
-
+    # Uses the temporary database configured above — never delete the real travel_bot.db.
     await database.init_db()
 
     # 1. User creation

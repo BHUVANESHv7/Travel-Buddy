@@ -162,7 +162,18 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("Travel Buddy Bot starting up…")
+    app = build_application(token)
+    logger.info("All handlers successfully registered. Starting polling…")
 
+    # 7. Start polling
+    app.run_polling(
+        allowed_updates=["message", "edited_message", "callback_query"],
+        drop_pending_updates=True,
+    )
+
+
+def build_application(token: str) -> Application:
+    """Create the Telegram application with every handler registered (does not start polling)."""
     # 2. Build the Application with DB initialisation post-init hook
     app = (
         Application.builder()
@@ -309,14 +320,7 @@ def main() -> None:
 
     # 6. Global error handler
     app.add_error_handler(error_handler)
-
-    logger.info("All handlers successfully registered. Starting polling…")
-
-    # 7. Start polling
-    app.run_polling(
-        allowed_updates=["message", "edited_message", "callback_query"],
-        drop_pending_updates=True,
-    )
+    return app
 
 
 if __name__ == "__main__":

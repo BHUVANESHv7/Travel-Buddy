@@ -251,7 +251,7 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `SAFETY_INACTIVITY_MIN` | | `30` | Minutes without location during a trip before a check-in |
 | `SAFETY_ESCALATE_MIN` | | `15` | Minutes to answer a check-in before responders are alerted |
 | `WEB_ENABLED` | | `1` | Set to `0` to disable the web portal |
-| `WEB_HOST` / `WEB_PORT` | | `127.0.0.1` / `8080` | Web portal bind address |
+| `WEB_HOST` / `WEB_PORT` | | `127.0.0.1` / `8080` | Web portal bind address (if the port is busy, the next free port is used automatically and shown in the log) |
 | `DASHBOARD_TOKEN` | | random | Secret for the command center (a random one is sent to admins at start-up if unset) |
 | `PUBLIC_BASE_URL` | | `http://localhost:8080` | Public URL used in QR codes (e.g. an ngrok or server URL) |
 | `DATABASE_PATH` | | `./travel_bot.db` | SQLite database location |
@@ -352,9 +352,12 @@ python tests/test_intel.py          # hotspots, weather, safe routes, distress d
 python tests/test_trips.py          # trip lifecycle & state transitions
 python tests/simulate_live_trip.py  # live GPS simulation: alerts, arrival, overshoot
 python tests/test_ai_guide.py       # preferences + web search grounding (needs internet)
+python tests/live_check.py          # LIVE end-to-end run through the real Telegram API (see below)
 ```
 
-The safety and intelligence suites run fully offline against a temporary database.
+The safety and intelligence suites run fully offline against a temporary database. No test touches your real `travel_bot.db`.
+
+**Live end-to-end check.** After pressing **Start** in your bot once, `tests/live_check.py` sends a scripted session through the bot's real handlers: 40 checks covering ID registration with QR, geo-fencing, live journey tracking and arrival, reports, E-FIR, SOS, admin dashboard and the AI guide. Every reply is delivered to your Telegram chat in real time, and every Bot API call is verified. It uses the first ID in `ADMIN_IDS`, or `--chat-id`.
 
 ---
 

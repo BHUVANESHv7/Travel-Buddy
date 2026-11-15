@@ -8,6 +8,7 @@ geofence.py — Geo-fencing engine, emergency services lookup and emergency numb
     (Overpass API) — no API key needed.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -19,7 +20,11 @@ logger = logging.getLogger(__name__)
 
 APPROACH_BUFFER_M = 1000.0  # warn this far before the edge of high/restricted zones
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_MIRRORS = [OVERPASS_URL, "https://overpass.private.coffee/api/interpreter",
+                    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+OVERPASS_BUDGET_S = 10.0  # total time allowed for Overpass before falling back to Nominatim
 USER_AGENT = "TravelBuddyTelegramBot/1.0 (https://github.com/travelbuddy)"
 
 RISK_ORDER = {"safe": 0, "caution": 1, "high": 2, "restricted": 3}
@@ -162,14 +167,25 @@ async def find_nearby_services(lat: float, lng: float, radius_m: int = 5000,
         f' way["amenity"~"^({amenities})$"](around:{radius_m},{lat},{lng}););'
         f'out center 60;'
     )
+    async def overpass() -> list | None:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            for url in OVERPASS_MIRRORS:  # public servers are sometimes overloaded (502/504) — try the next
+                try:
+                    r = await client.post(url, data={"data": query}, headers={"User-Agent": USER_AGENT})
+                    r.raise_for_status()
+                    return r.json().get("elements", [])
+                except Exception as exc:
+                    reason = (str(exc).splitlines() or [""])[0] or type(exc).__name__
+                    logger.warning("Overpass lookup failed on %s: %s", url, reason)
+        return None
+
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT})
-            r.raise_for_status()
-            elements = r.json().get("elements", [])
-    except Exception as exc:
-        logger.warning("Overpass lookup failed: %s", exc)
-        return []
+        elements = await asyncio.wait_for(overpass(), timeout=OVERPASS_BUDGET_S)
+    except asyncio.TimeoutError:
+        logger.warning("Overpass took longer than %ss; using Nominatim fallback.", OVERPASS_BUDGET_S)
+        elements = None
+    if not elements:
+        return await _nominatim_services(lat, lng, radius_m, per_type)
 
     results = []
     for el in elements:
@@ -194,6 +210,39 @@ async def find_nearby_services(lat: float, lng: float, radius_m: int = 5000,
             picked.append(item)
             counts[item["type"]] = counts.get(item["type"], 0) + 1
     return picked
+
+
+async def _nominatim_services(lat: float, lng: float, radius_m: int, per_type: int) -> list[dict]:
+    """Fallback: OpenStreetMap Nominatim search for police / hospitals / pharmacies near a point."""
+    d = radius_m / 111_000  # degrees, roughly
+    viewbox = f"{lng - d},{lat + d},{lng + d},{lat - d}"
+    picked: list[dict] = []
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for i, kind in enumerate(("police", "hospital", "pharmacy")):
+            if i:
+                await asyncio.sleep(1.0)  # Nominatim usage policy: max 1 request per second
+            try:
+                r = await client.get(NOMINATIM_SEARCH_URL, params={
+                    "q": kind, "format": "jsonv2", "limit": 6, "viewbox": viewbox, "bounded": 1,
+                }, headers={"User-Agent": USER_AGENT, "Accept-Language": "en"})
+                r.raise_for_status()
+                rows = r.json()
+            except Exception as exc:
+                logger.warning("Nominatim %s lookup failed: %s", kind, type(exc).__name__)
+                continue
+            found = []
+            for row in rows:
+                if row.get("category") != "amenity" or row.get("type") != kind:
+                    continue
+                e_lat, e_lng = float(row["lat"]), float(row["lon"])
+                found.append({
+                    "type": kind,
+                    "name": row.get("name") or row.get("display_name", "Unnamed").split(",")[0],
+                    "phone": None, "lat": e_lat, "lng": e_lng,
+                    "distance_m": haversine_distance_meters(lat, lng, e_lat, e_lng),
+                })
+            picked += sorted(found, key=lambda x: x["distance_m"])[:per_type]
+    return sorted(picked, key=lambda x: x["distance_m"])
 
 
 def maps_link(lat: float, lng: float) -> str:

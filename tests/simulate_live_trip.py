@@ -38,6 +38,10 @@ from travel_buddy.core.tracker import (
     ARRIVAL_DISTANCE_METERS_THRESHOLD,
 )
 from travel_buddy.core import database
+
+# Isolated database so the test is repeatable and never touches real data
+import tempfile as _tempfile
+database.DB_PATH = os.path.join(_tempfile.mkdtemp(), "test.db")
 # Destination: Zurich Hauptbahnhof (Zurich HB)
 DEST_LAT = 47.3781
 DEST_LNG = 8.5394
@@ -65,9 +69,7 @@ async def run_simulation():
     print(">>> TRAVEL BUDDY -- LIVE JOURNEY & PROXIMITY ALERT SIMULATOR")
     print("=" * 68)
 
-    # Clean DB and set up test user and trip
-    if os.path.exists("travel_bot.db"):
-        pass  # keep or init
+    # Fresh temporary database (configured above) with a test user and trip
     await database.init_db()
 
     user_id = 9999

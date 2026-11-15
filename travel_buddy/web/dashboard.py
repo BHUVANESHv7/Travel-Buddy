@@ -40,8 +40,11 @@ def dashboard_token() -> str:
     return _token
 
 
+_bound_port: int | None = None  # the port actually in use (may differ from WEB_PORT if it was busy)
+
+
 def public_base_url() -> str:
-    port = os.getenv("WEB_PORT", "8080")
+    port = _bound_port or int(os.getenv("WEB_PORT", "8080"))
     return os.getenv("PUBLIC_BASE_URL", f"http://localhost:{port}").rstrip("/")
 
 
@@ -255,15 +258,29 @@ class Handler(BaseHTTPRequestHandler):
 _server: ThreadingHTTPServer | None = None
 
 
+PORT_FALLBACK_TRIES = 20
+
+
 def start_web_server(host: str | None = None, port: int | None = None) -> ThreadingHTTPServer | None:
-    global _server
+    """Start the portal; if the port is busy or blocked, try the next ones (8080 → 8081 → …)."""
+    global _server, _bound_port
     host = host or os.getenv("WEB_HOST", "127.0.0.1")
-    port = port if port is not None else int(os.getenv("WEB_PORT", "8080"))
-    try:
-        _server = ThreadingHTTPServer((host, port), Handler)
-    except OSError as exc:
-        logger.warning("Web command center not started (%s:%s): %s", host, port, exc)
+    first = port if port is not None else int(os.getenv("WEB_PORT", "8080"))
+    candidates = [first] if first == 0 else range(first, first + PORT_FALLBACK_TRIES)
+    last_exc = None
+    for p in candidates:
+        try:
+            _server = ThreadingHTTPServer((host, p), Handler)
+            break
+        except OSError as exc:
+            last_exc = exc
+    else:
+        logger.warning("Web command center not started (%s:%s-%s): %s",
+                       host, first, first + PORT_FALLBACK_TRIES - 1, last_exc)
         return None
+    _bound_port = _server.server_address[1]
+    if first and _bound_port != first:
+        logger.warning("Port %s is in use by another program; web portal moved to port %s.", first, _bound_port)
     threading.Thread(target=_server.serve_forever, name="web-dashboard", daemon=True).start()
     logger.info("Web command center: %s/command?token=%s", public_base_url(), _token)
     return _server
