@@ -149,7 +149,7 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the package layout, seq
 | Weather | Open-Meteo |
 | Storage | SQLite via `aiosqlite` |
 | Ledger | SHA-256 hash chain with proof-of-work (built in) |
-| Web portal | Python standard library HTTP server, Leaflet |
+| Web portal | Python standard library HTTP server, Leaflet, hand-built CSS and JavaScript (no framework) |
 | QR codes | `segno` |
 
 ---
@@ -181,7 +181,9 @@ Travel-Buddy/
 │   │   ├── intel_handlers.py   #   copilot, voice, evidence, routes, weather, QR
 │   │   └── keyboards.py
 │   └── web/
-│       └── dashboard.py        # Command center, ID verification, ledger explorer
+│       ├── dashboard.py        # HTTP server, JSON API, data access
+│       ├── pages.py            # HTML views (landing, verify, ledger, command center)
+│       └── static/             # Design system CSS, page scripts, favicon
 ├── tests/                      # Offline & integration test suites
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -326,6 +328,17 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `/ledger` | Public | Ledger explorer (hashes only) |
 | `/command?token=…` | 🔒 Token | Live command-center map |
 | `/api/overview?token=…` | 🔒 Token | JSON feed for the command center |
+
+<p align="center">
+  <img src="docs/assets/id-verification.jpg" alt="Animated Digital Tourist ID verification page" width="720">
+</p>
+
+**Interface highlights**
+
+- **Command center:** count-up KPI tiles that flash when values change; pulsing map markers by severity; a flashing banner and red vignette for critical alerts; slide-in toasts and optional alert sounds for new incidents. Also has tabs for incidents, tourists, hotspots and activity, with search and severity filters, and fly-to-incident on click.
+- **ID verification:** a holographic ID card that tilts with the pointer; verification checks that tick one by one; an animated VALID / INVALID stamp.
+- **Ledger explorer:** an animated chain timeline, expandable block payloads and click-to-copy hashes.
+- **Throughout:** dark "aurora" theme, glass panels, reveal-on-scroll, responsive down to phone width, keyboard focus styles, and full support for the *reduced motion* accessibility setting.
 
 To let phones open QR links, expose the portal (for example `ngrok http 8080`) and set `PUBLIC_BASE_URL`.
 

@@ -76,7 +76,9 @@ travel_buddy/
 │   ├── intel_handlers.py  # copilot, voice, photo evidence, /saferoute /weather /hotspots /phrases, QR
 │   └── keyboards.py       # persistent SOS keyboard
 └── web/
-    └── dashboard.py       # /command (token), /api/overview, /verify/<TID>, /ledger
+    ├── dashboard.py       # HTTP server: /command (token), /api/overview, /verify/<TID>, /ledger, /static/*
+    ├── pages.py           # HTML views (server-rendered, all values escaped)
+    └── static/            # portal.css · pages.css · command.css · portal.js · command.js · favicon.svg
 ```
 
 **Dependency direction:** `bot → safety / ai / core`, `safety → ai / core`, `web → safety / core`. Nothing in `core` imports from the other packages. The two bot modules that need each other use local imports to avoid cycles.
