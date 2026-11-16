@@ -326,6 +326,7 @@ def command_html(token: str) -> str:
         <button class="tab active" data-tab="incidents" role="tab">Incidents <span class="count" id="c-incidents">0</span></button>
         <button class="tab" data-tab="tourists" role="tab">Tourists <span class="count" id="c-tourists">0</span></button>
         <button class="tab" data-tab="hotspots" role="tab">Hotspots <span class="count" id="c-hotspots">0</span></button>
+        <button class="tab" data-tab="forecast" role="tab">Forecast <span class="count" id="c-forecast">0</span></button>
         <button class="tab" data-tab="activity" role="tab">Activity</button>
         <button class="tab" data-tab="desk" role="tab">Desk</button>
       </div>

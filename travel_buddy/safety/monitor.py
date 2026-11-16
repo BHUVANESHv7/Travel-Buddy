@@ -175,6 +175,7 @@ def compute_safety_score(
     location_known: bool = True,
     weather_risk: str = "none",
     hotspot_risk: str | None = None,
+    forecast_level: str | None = None,
 ) -> dict:
     score = 100
     factors = []
@@ -195,7 +196,14 @@ def compute_safety_score(
     if not location_known:
         penalise(10, "no recent location")
     penalise({"high": 15, "medium": 5}.get(weather_risk, 0), f"{weather_risk}-risk weather")
-    penalise({"high": 15, "caution": 8}.get(hotspot_risk or "", 0), "near a learned incident hotspot")
+    # Learned hotspots (past) and the predictive model (next hours) share the same incident data,
+    # so only the stronger of the two counts.
+    hot_pen = {"high": 15, "caution": 8}.get(hotspot_risk or "", 0)
+    fc_pen = {"high": 15, "elevated": 8}.get(forecast_level or "", 0)
+    if fc_pen > hot_pen:
+        penalise(fc_pen, f"{forecast_level} predicted incident risk here now")
+    else:
+        penalise(hot_pen, "near a learned incident hotspot")
     if not has_digital_id:
         penalise(5, "no digital tourist ID")
     if not has_guardian:

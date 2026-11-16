@@ -149,6 +149,7 @@
       <div class="tile"><span class="k">Digital ID</span><span class="v">${ov.digital_id ? "🪪 " + esc(ov.digital_id.tourist_id) : "not registered"}</span></div>
       <div class="tile ${ov.guardians.some(g => g.linked) ? "" : "warn"}"><span class="k">Guardians</span><span class="v">${ov.guardians.filter(g => g.linked).length} linked</span></div>
     </div>
+    ${forecastCard(ov.forecast)}
     ${w && w.hazards.length ? `<div class="card" style="margin-top:16px"><h3>🌩️ Weather hazards near you</h3><div class="notes">${w.hazards.map(h => `<div class="note">${esc(h.text)}</div>`).join("")}</div></div>` : ""}
     <div class="grid g-2" style="margin-top:16px">
       <div class="card"><h3>🗺️ Your safety map</h3><p class="sub">Your position, recent trail, nearby risk zones and learned hotspots.</p><div class="map" id="map-home"></div></div>
@@ -156,6 +157,34 @@
         <div class="notes" id="notes">${S.notes.length ? S.notes.map(n => `<div class="note">${n}</div>`).join("") : '<div class="empty"><span class="e">🛰️</span>Share your location to get geo-fence and hotspot alerts.</div>'}</div></div>
     </div>`;
   };
+
+  const FC_COLOR = { low: "#2ee59d", moderate: "#ffc857", elevated: "#ff8c42", high: "#ff4d6d" };
+  const fcLevel = i => i >= 60 ? "high" : i >= 40 ? "elevated" : i >= 20 ? "moderate" : "low";
+  const CONF_NOTE = {
+    learning: "Still learning: too few incident reports yet, so this leans on zones and time of day.",
+    low: "Few reports near here, so confidence is low.",
+    medium: "Moderate confidence.",
+    high: "High confidence: plenty of nearby reports.",
+  };
+  function forecastCard(f) {
+    if (!f) return "";
+    const pct = x => Math.round(x * 100) + "%";
+    const bars = f.hourly.map((h, n) => `<div class="fc-bar" title="${h.label} · ${h.index}/100" style="--h:${Math.max(4, h.index)}%;--c:${FC_COLOR[fcLevel(h.index)]};animation-delay:${n * 18}ms">
+      ${n % 3 === 0 ? `<span>${h.label.slice(0, 2)}</span>` : ""}</div>`).join("");
+    return `<div class="card fc-card" style="margin-top:16px">
+      <div class="fc-head"><div><h3>🔮 Risk forecast · next 24 h</h3><p class="sub">Predicted from incident reports, learned patterns by place and hour, zones and time of night.</p></div>
+        <div class="fc-now" style="--c:${FC_COLOR[f.level]}"><b>${f.index}</b><span>risk index · ${esc(f.level)} now</span></div></div>
+      <div class="fc-bars" role="img" aria-label="Hourly risk for the next 24 hours">${bars}</div>
+      <div class="tiles fc-tiles">
+        <div class="tile"><span class="k">Incident nearby, next 6 h</span><span class="v">${pct(f.p_6h)}</span></div>
+        <div class="tile"><span class="k">Next 24 h</span><span class="v">${pct(f.p_24h)}</span></div>
+        <div class="tile ${f.peak && f.peak.index >= 40 ? "warn" : ""}"><span class="k">Riskiest hour</span><span class="v">${f.peak && f.peak.index >= 20 ? esc(f.peak.label) : "—"}</span></div>
+        <div class="tile"><span class="k">Safest window</span><span class="v">${f.safest ? esc(f.safest.from + "–" + f.safest.to) : "—"}</span></div>
+      </div>
+      <ul class="factors" style="margin-top:12px">${f.drivers.map(d => `<li>${esc(d)}</li>`).join("")}</ul>
+      <p class="muted fc-note">Model trained on ${f.trained_on} report(s) and updated automatically. ${CONF_NOTE[f.confidence] || ""}</p>
+    </div>`;
+  }
 
   V.trip = () => {
     const t = S.ov.trip;
@@ -307,6 +336,7 @@
           <h2>${esc(p.name)}</h2><p class="sub">${p.tourist_id ? esc(p.tourist_id) + " · " : ""}${p.place ? "📍 " + esc(p.place) : p.location ? `📍 ${p.location.lat.toFixed(4)}, ${p.location.lng.toFixed(4)}` : "no location yet"}</p>
           <dl class="kv"><dt>Safety</dt><dd style="color:${color}">${p.score.score}/100 · ${esc(p.score.label)}</dd>
             <dt>Last seen</dt><dd>${p.location ? ago(p.location.seen_ts) : "—"}</dd>
+            ${p.forecast ? `<dt>Forecast</dt><dd style="color:${FC_COLOR[p.forecast.level]}">${esc(p.forecast.level)} · ${Math.round(p.forecast.p_6h * 100)}% chance of an incident nearby in 6 h</dd>` : ""}
             <dt>Zone</dt><dd style="color:${RISK[p.zone_risk]}">${p.zones_inside.length ? esc(p.zones_inside.join(", ")) : "no risk zone"}</dd>
             <dt>Trip</dt><dd>${p.trip ? esc(p.trip.destination) + " (" + esc(p.trip.status) + ")" : "none"}</dd>
             <dt>Timer</dt><dd>${p.timer_due_ts ? "due in " + Math.max(0, Math.round((p.timer_due_ts - Date.now() / 1000) / 60)) + " min" : "off"}</dd></dl>

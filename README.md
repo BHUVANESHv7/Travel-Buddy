@@ -78,8 +78,9 @@ Tourists in unfamiliar places, especially remote, border or hazard-prone regions
 - Risk zones (🟢 safe · 🟡 caution · 🟠 high · 🔴 restricted) with **approach** warnings 1 km before the edge, plus **enter** and **exit** alerts
 - Entering a restricted zone creates an incident and notifies guardians and the safety desk
 - **Self-learning hotspots:** incident reports are clustered (DBSCAN-style) into dynamic danger zones, weighted by recency and severity
+- **🔮 Predictive risk model (`/forecast`):** forecasts *where and when* incidents are likely over the next 24 hours, from the place, the hour of day and near-repeat effects after fresh reports. It gives the chance of an incident within 500 m, the riskiest hour and the safest window, and warns tourists before risk rises. It retrains automatically and reports its own accuracy from a backtest. [How it works ↓](#-predictive-risk-model)
 - **Severe-weather watch** (Open-Meteo): thunderstorms, heavy rain (landslide and flood risk), fog, extreme heat or cold, strong winds
-- **`/saferoute`:** the real road route is scored against zones, hotspots, weather and time of night, with reasons
+- **`/saferoute`:** the real road route is scored against zones, hotspots, predicted risk, weather and time of night, with reasons
 - Nearest police, hospitals and pharmacies (OpenStreetMap) and country-specific emergency numbers
 
 </details>
@@ -125,7 +126,7 @@ Tourists in unfamiliar places, especially remote, border or hazard-prone regions
 flowchart LR
     T[🧳 Tourist] -- location · voice · photo · text --> BOT[Telegram bot]
     BOT --> TRK[Journey tracker]
-    BOT --> GEO[Geo-fencing<br/>+ learned hotspots]
+    BOT --> GEO[Geo-fencing<br/>+ learned hotspots<br/>+ 🔮 risk forecast]
     BOT --> MON[Anomaly detection<br/>+ safety score]
     BOT --> AI[AI copilot · triage · Whisper]
     GEO & MON & AI --> INC{Incident?}
@@ -137,6 +138,41 @@ flowchart LR
 ```
 
 See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the package layout, sequence diagrams, data model, ledger design and every detection threshold.
+
+### 🔮 Predictive risk model
+
+`travel_buddy/safety/forecast.py` is a spatio-temporal incident forecaster, the approach used for crime-hotspot forecasting, sized to run on a small server with no ML libraries:
+
+```
+rate(place, hour) = Σ  kernel(distance) × [ long-term memory + near-repeat boost ] × hour-of-day share
+                   past incidents
+```
+
+| Part | What it captures |
+|---|---|
+| Gaussian spatial kernel (σ = 300 m) | Risk spreads around each reported incident |
+| Long-term memory (45-day decay) | The background incident rate of a place |
+| Near-repeat boost (3-day decay) | Incidents cluster in time: a fresh report raises nearby risk for a few days |
+| Hour-of-day profile | Each place's own peak hours, shrunk toward the city-wide pattern and a tourist-safety prior (empirical Bayes), so sparse areas don't overfit |
+| Zone and night priors | Advisory zones and late hours still count when there is little data |
+
+**Outputs:** the chance of a reported incident within 500 m in the next 6 or 24 hours (Poisson), a 0–100 risk index for every hour, the riskiest hour, the safest 3-hour window, plain-language reasons and a confidence level. While there are fewer than 5 reports it says it is still learning.
+
+**Where it is used:**
+- `/forecast` and the Safety tab on the website
+- Proactive "risk rising" warnings on location updates
+- The safety score (the stronger of hotspot or forecast, never both) and `/saferoute`
+- AI copilot answers
+- The guardian view
+- The command center's **Forecast** tab: predicted places for the next 6 hours, a map layer and model accuracy
+
+**Self-evaluation:** the model is retrained on everything before the last 14 days and scored on what actually happened in those 14 days. It reports the hit rate of the top 10% of the area it flags, the Predictive Accuracy Index (PAI = hit rate ÷ area share, where 1 means chance) next to a naive pin-map baseline, and its time-of-day skill. On the synthetic test city (`tests/test_forecast.py`):
+
+| Metric | Result |
+|---|---|
+| Incidents caught in the top 10% of the area | ~55% (PAI ≈ 5.5) |
+| Time-of-day skill vs guessing the hour | ~3.5× |
+| Fit on 2,400 reports | ~11 ms |
 
 ---
 
@@ -200,6 +236,7 @@ Travel-Buddy/
 │   │   ├── monitor.py          #   anomaly detection & safety score
 │   │   ├── incidents.py        #   incidents, responders, check-ins, monitor loop
 │   │   ├── risk_intel.py       #   hotspots, weather, safe routes
+│   │   ├── forecast.py         #   🔮 predictive risk model + backtest
 │   │   ├── actions.py          #   shared actions used by both the bot and the website
 │   │   └── store.py            #   safety schema & queries
 │   ├── bot/                    # Telegram interface
@@ -336,6 +373,7 @@ docker compose up -d --build         # or: deploy/travel-buddy.service with syst
 | `/safety` | Live safety score and status |
 | `/nearby` | Closest police, hospitals and emergency numbers |
 | `/zones` · `/hotspots` | Geo-fenced risk zones and learned incident hotspots nearby |
+| `/forecast` | 🔮 Predicted incident risk around you for the next 24 h (admins: `/forecast area` for the next 6 h + model accuracy) |
 | `/weather` | Weather hazards now and for the next 6 hours |
 | `/saferoute <place>` | Route safety analysis with directions |
 | `/timer <min>` · `/safe` | Safety timer and "I'm okay" |
@@ -438,6 +476,7 @@ python tests/simulate_live_trip.py  # live GPS simulation: alerts, arrival, over
 python tests/test_ai_guide.py       # preferences + web search grounding (needs internet)
 python tests/test_costs.py          # zero-cost guards: daily caps, AI fallback, rate limits, caches
 python tests/test_portal.py         # web portal: sign-in, CSRF, tourist & guardian actions, permissions, officer actions
+python tests/test_forecast.py       # predictive model: learns place + hour, calibration, near-repeat, backtest, speed
 python tests/test_deploy.py         # production readiness: config checks, clean database, /healthz, proxy IPs, backups
 python scripts/run_tests.py         # all of the above in one go (also runs in GitHub Actions)
 python tests/live_check.py          # LIVE end-to-end run through the real Telegram API (see below)
@@ -445,7 +484,7 @@ python tests/live_check.py          # LIVE end-to-end run through the real Teleg
 
 The safety and intelligence suites run fully offline against a temporary database. No test touches your real `travel_bot.db`; the live check also uses a temporary database unless you pass `--real-db`.
 
-**Live end-to-end check.** After pressing **Start** in your bot once, `tests/live_check.py` sends a scripted session through the bot's real handlers: 40 checks covering ID registration with QR, geo-fencing, live journey tracking and arrival, reports, E-FIR, SOS, admin dashboard and the AI guide. Every reply is delivered to your Telegram chat in real time, and every Bot API call is verified. It uses the first ID in `ADMIN_IDS`, or `--chat-id`.
+**Live end-to-end check.** After pressing **Start** in your bot once, `tests/live_check.py` sends a scripted session through the bot's real handlers: 42 checks covering ID registration with QR, geo-fencing, the risk forecast, live journey tracking and arrival, reports, E-FIR, SOS, admin dashboard and the AI guide. Every reply is delivered to your Telegram chat in real time, and every Bot API call is verified. It uses the first ID in `ADMIN_IDS`, or `--chat-id`.
 
 ---
 

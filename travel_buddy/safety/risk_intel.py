@@ -154,7 +154,10 @@ async def get_hotspots(force: bool = False) -> list[dict]:
 
 
 def invalidate_hotspots() -> None:
+    """Called on every new incident: the learned hotspots and the predictive model both change."""
     _hotspot_cache["key"] = None
+    from travel_buddy.safety import forecast  # local import avoids cycles
+    forecast.invalidate()
 
 
 def hotspots_near(lat: float, lng: float, hotspots: list[dict], within_m: float) -> list[tuple[dict, float]]:
@@ -293,8 +296,8 @@ async def fetch_route(a_lat: float, a_lng: float, b_lat: float, b_lng: float) ->
 
 
 def assess_route(path: list[tuple[float, float]], zones: list[dict], hotspots: list[dict],
-                 local_hour: float | None = None, weather: dict | None = None) -> dict:
-    """Score a route. Pure function (testable offline)."""
+                 local_hour: float | None = None, weather: dict | None = None, model=None) -> dict:
+    """Score a route. Pure function (testable offline). `model` = optional forecast.RiskModel."""
     samples = densify(path)
     zone_hits: dict[int, dict] = {}
     for z in zones:
@@ -324,6 +327,22 @@ def assess_route(path: list[tuple[float, float]], zones: list[dict], hotspots: l
         score -= pen
         reasons.append(f"crosses incident hotspot {h['hotspot_id']} ({h['count']} recent {h['dominant_type']} "
                        f"reports) (-{pen})")
+    # Predictive model: incident risk expected along the route right now. Skipped where a learned
+    # hotspot was already counted, since both come from the same incident reports.
+    predicted = None
+    if model is not None and model.events and not hot_hits:
+        step = max(1, len(samples) // 60)  # cap the work on very long routes
+        for lat, lng in samples[::step]:
+            f = model.predict(lat, lng, hours=1)
+            if f["confidence"] in ("medium", "high") and (predicted is None or f["data_index"] > predicted["data_index"]):
+                predicted = {**f, "lat": lat, "lng": lng}
+        if predicted and predicted["data_level"] in ("elevated", "high"):
+            pen = 15 if predicted["data_level"] == "high" else 8
+            score -= pen
+            reasons.append(f"model predicts {predicted['data_level']} incident risk on part of the route right now"
+                           f" (mostly {(predicted['dominant_type'] or 'incidents').replace('_', ' ')}) (-{pen})")
+        else:
+            predicted = None
     if local_hour is not None and (local_hour >= 22 or local_hour < 5):
         score -= 15
         reasons.append("travelling late at night (-15)")
@@ -342,7 +361,9 @@ def assess_route(path: list[tuple[float, float]], zones: list[dict], hotspots: l
     else:
         verdict = "🛑 High risk — consider another time, route or a registered guide/taxi."
     return {"score": score, "verdict": verdict, "reasons": reasons,
-            "zones": list(zone_hits.values()), "hotspots": list(hot_hits.values())}
+            "zones": list(zone_hits.values()), "hotspots": list(hot_hits.values()),
+            "predicted": {"lat": predicted["lat"], "lng": predicted["lng"], "level": predicted["data_level"],
+                          "index": predicted["data_index"]} if predicted else None}
 
 
 def directions_link(a_lat: float, a_lng: float, b_lat: float, b_lng: float) -> str:

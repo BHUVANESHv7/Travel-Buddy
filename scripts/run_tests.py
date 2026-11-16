@@ -13,7 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = ["test_safety.py", "test_intel.py", "test_portal.py", "test_costs.py",
-          "test_trips.py", "simulate_live_trip.py", "test_deploy.py", "test_ai_guide.py"]
+          "test_trips.py", "simulate_live_trip.py", "test_deploy.py", "test_forecast.py",
+          "test_ai_guide.py"]
 
 
 def main() -> int:

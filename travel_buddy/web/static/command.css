@@ -126,7 +126,10 @@ path.zone { stroke-dasharray: 6 6; animation: march 30s linear infinite; }
 /* ---------- sidebar ---------- */
 .side { min-height: 0; display: flex; flex-direction: column; border-radius: var(--radius); background: var(--panel);
   border: 1px solid var(--line); backdrop-filter: blur(14px); overflow: hidden; animation: fadeUp .7s .15s var(--ease) both; }
-.tabs { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); padding: 6px; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs { position: relative; display: flex; padding: 6px; gap: 4px; border-bottom: 1px solid var(--line);
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs .tab { flex: 1 0 auto; padding: 0 10px; white-space: nowrap; }
 .tab {
   position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
   height: 36px; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer;
@@ -258,3 +261,17 @@ path.zone { stroke-dasharray: 6 6; animation: march 30s linear infinite; }
 .zone-form input:focus, .zone-form select:focus { border-color: var(--accent); }
 .zone-form button { height: 36px; border-radius: 9px; border: 0; cursor: pointer; font: 700 13px var(--font); color: #04121c; background: var(--grad); }
 .hint-pick { font-size: 12px; color: var(--accent); }
+
+/* ── predictive model ── */
+.fc-zone { animation: march 18s linear infinite; }
+.fc-model { padding: 14px; border-radius: 14px; border: 1px solid var(--line); margin-bottom: 6px;
+  background: linear-gradient(135deg, rgba(123, 97, 255, .12), rgba(76, 201, 240, .06)); animation: slideIn .45s var(--ease) both; }
+.fc-model-top { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.fc-model-top .r { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.fc-model p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.fc-acc { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.fc-acc div { padding: 10px; border-radius: 10px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.fc-acc b { display: block; font-size: 20px; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.fc-acc span { font-size: 11px; color: var(--muted); line-height: 1.35; display: block; margin-top: 2px; }
+.fc-h { margin: 14px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+@media (max-width: 520px) { .fc-acc { grid-template-columns: 1fr; } }

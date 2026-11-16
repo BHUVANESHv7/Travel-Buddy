@@ -206,6 +206,10 @@ def run_tests(base):
     s, ov = t.json("GET", "/api/me/overview")
     assert ov["zones_inside"][0]["risk"] == "caution" and ov["score"]["score"] < 100 and ov["place"].startswith("Ramganj")
     ok(f"Location → geo-fence alert; overview score {ov['score']['score']} ({ov['score']['label']})")
+    fc = ov["forecast"]
+    assert fc and len(fc["hourly"]) == 24 and 0 <= fc["p_6h"] <= 1 and fc["confidence"] == "learning", fc
+    assert any("caution-risk zone" in d for d in fc["drivers"]), fc["drivers"]
+    ok(f"Overview carries the 24-hour risk forecast (now {fc['index']}/100, {fc['confidence']})")
 
     # ── Digital ID ──
     s, body = t.json("POST", "/api/me/id", {"full_name": "Asha Verma", "nationality": "Indian", "doc_type": "Passport",
@@ -381,6 +385,9 @@ def run_tests(base):
                                                  "lat": 26.95, "lng": 75.80, "advisory": "No entry"})
     assert s == 200 and body["zone"]["risk"] == "restricted"
     zid = body["zone"]["id"]
+    s, body = anon.json("GET", "/api/overview", headers={"X-TB-Token": "desk-token-xyz"})
+    assert s == 200 and "places" in body["forecast"] and "ready" in body["forecast"]["accuracy"], body.get("forecast")
+    ok(f"Command center feed includes the area forecast ({body['forecast']['trained_on']} reports learned)")
     s, body = anon.json("GET", "/api/desk/zones", headers={"X-TB-Token": "desk-token-xyz"})
     assert any(z["id"] == zid for z in body["zones"])
     s, body = o.json("POST", "/api/desk/zones", {"name": "Bad", "risk": "restricted", "radius_m": 10, "lat": 0, "lng": 0})

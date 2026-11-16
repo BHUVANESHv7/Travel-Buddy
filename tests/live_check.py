@@ -176,6 +176,7 @@ async def run(chat_id: int, pace: float) -> int:
     await s.step("/weather", ("text", "/weather"))
     await s.step("/zones", ("text", "/zones"))
     await s.step("/hotspots", ("text", "/hotspots"))
+    await s.step("/forecast (predictive model)", ("text", "/forecast"))
     await s.step("/saferoute (OSRM road route)", ("text", "/saferoute Hawa Mahal, Jaipur"))
     await s.step("/phrases (auto language)", ("text", "/phrases"))
     await s.step("/phrases tamil", ("text", "/phrases tamil"))
@@ -220,6 +221,7 @@ async def run(chat_id: int, pace: float) -> int:
     await s.step("/monitoring", ("text", "/monitoring"))
     await s.step("/dashboard (admin)", ("text", "/dashboard"))
     await s.step("/incidents all (admin)", ("text", "/incidents all"))
+    await s.step("/forecast area (admin)", ("text", "/forecast area"))
     await s.step("/web (portal links)", ("text", "/web"))
 
     # ── AI travel guide with preferences onboarding ──

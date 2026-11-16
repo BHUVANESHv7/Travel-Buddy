@@ -33,6 +33,7 @@ from travel_buddy.safety.incidents import is_admin
 from travel_buddy.web import auth, pages, portal_api, runtime
 from travel_buddy.safety.ledger import compute_identity_hash, verify_blocks
 from travel_buddy.safety.geofence import RISK_ORDER
+from travel_buddy.safety import forecast
 from travel_buddy.safety.risk_intel import HOTSPOT_DAYS, cached_hotspots
 
 logger = logging.getLogger(__name__)
@@ -122,10 +123,12 @@ def build_overview() -> dict:
         who = names.get(i["telegram_id"], {"name": f"User {i['telegram_id']}", "tid": None})
         i["name"], i["tid"] = who["name"], who["tid"]
 
+    history = _q("SELECT * FROM incidents WHERE lat IS NOT NULL AND created_at >= ? "
+                 "AND incident_type NOT IN ('no_response', 'geofence_breach')", (forecast.history_since(),))
     since = (datetime.now(timezone.utc) - timedelta(days=HOTSPOT_DAYS)).isoformat()
-    hotspots = cached_hotspots(_q(
-        "SELECT * FROM incidents WHERE lat IS NOT NULL AND created_at >= ? "
-        "AND incident_type NOT IN ('no_response', 'geofence_breach')", (since,)))
+    hotspots = cached_hotspots([i for i in history if i["created_at"] >= since])
+    model = forecast.cached_model(history)
+    predicted = forecast.cached_hotspot_forecast(history, hours=6)
 
     chain = verify_blocks(_q("SELECT * FROM ledger ORDER BY block_index ASC"))
     open_inc = [i for i in incidents if i["status"] != "resolved"]
@@ -148,6 +151,8 @@ def build_overview() -> dict:
         "incidents": incidents,
         "zones": zones,
         "hotspots": hotspots,
+        "forecast": {"hours": 6, "places": predicted, "trained_on": len(model.events),
+                     "history_days": forecast.HISTORY_DAYS, "accuracy": forecast.cached_backtest(history)},
     }
 
 

@@ -42,6 +42,7 @@ from travel_buddy.safety.store import (
     add_evidence, get_active_zones, get_open_user_incidents, get_safety_state,
     update_safety_state,
 )
+from travel_buddy.safety import forecast
 from travel_buddy.safety.monitor import approx_local_hour
 from travel_buddy.web.dashboard import dashboard_token, public_base_url
 
@@ -90,6 +91,7 @@ async def build_live_context(uid: int) -> dict:
     ctx: dict = {}
     weather = None
     hot_risk = None
+    fc = None
     if lat is not None:
         geo = await reverse_geocode(lat, lng)
         weather = await get_weather_risk(lat, lng)
@@ -108,9 +110,12 @@ async def build_live_context(uid: int) -> dict:
         hour = _local_hour(weather, lng)
         if hour is not None:
             ctx["local_time"] = f"{int(hour):02d}:{int((hour % 1) * 60):02d}"
+        fc = (await forecast.get_model()).predict(lat, lng, zones)
+        ctx["risk_forecast"] = forecast.summary_line(fc)
+    fc_level = fc["data_level"] if fc and fc["confidence"] in ("medium", "high") else None
     score = await sh._score_for(uid, state, inside)
-    if weather or hot_risk:
-        score = await _score_with_intel(uid, state, inside, weather, hot_risk)
+    if weather or hot_risk or fc_level:
+        score = await _score_with_intel(uid, state, inside, weather, hot_risk, fc_level)
     trip = await get_active_or_planning_trip(uid)
     ctx.update({
         "safety_score": f"{score['score']}/100 ({score['label']})",
@@ -121,10 +126,11 @@ async def build_live_context(uid: int) -> dict:
     })
     ctx["_score"] = score
     ctx["_weather"] = weather
+    ctx["_forecast"] = fc
     return ctx
 
 
-async def _score_with_intel(uid, state, inside, weather, hot_risk) -> dict:
+async def _score_with_intel(uid, state, inside, weather, hot_risk, fc_level=None) -> dict:
     from travel_buddy.safety.monitor import compute_safety_score, recent_anomaly_count
     from travel_buddy.safety.store import get_guardians
     return compute_safety_score(
@@ -138,6 +144,7 @@ async def _score_with_intel(uid, state, inside, weather, hot_risk) -> dict:
         location_known=bool(state["last_seen_ts"]) and time.time() - state["last_seen_ts"] < 3600,
         weather_risk=(weather or {}).get("worst", "none"),
         hotspot_risk=hot_risk,
+        forecast_level=fc_level,
     )
 
 
@@ -316,7 +323,8 @@ async def saferoute_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     route = await fetch_route(lat, lng, b_lat, b_lng)
     weather = await get_weather_risk(b_lat, b_lng)
     result = assess_route(route["path"], await get_active_zones(), await get_hotspots(),
-                          local_hour=_local_hour(weather, b_lng), weather=weather)
+                          local_hour=_local_hour(weather, b_lng), weather=weather,
+                          model=await forecast.get_model())
 
     bar = "█" * (result["score"] // 10) + "░" * (10 - result["score"] // 10)
     mins = int(route["duration_s"] // 60)
@@ -392,6 +400,55 @@ async def hotspots_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         lines.append(f"{RISK_EMOJI[h['risk_level']]} <a href='{maps_link(h['lat'], h['lng'])}'>{h['hotspot_id']}</a> "
                      f"· {h['count']} incidents · mostly {escape(h['dominant_type'])} · score {h['score']}{where}")
     await update.effective_message.reply_html("\n".join(lines), disable_web_page_preview=True)
+
+
+async def forecast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🔮 Predictive model: incident risk here for the next 24 h (admins: `/forecast area`)."""
+    user = update.effective_user
+    await upsert_user(user.id, user.username or user.first_name)
+    args = [a.lower() for a in context.args or []]
+    lat, lng, _ = await sh._last_known_location(user.id)
+    if is_admin(user.id) and (args[:1] == ["area"] or lat is None):
+        await update.effective_message.reply_html(await forecast_area_html(), disable_web_page_preview=True)
+        return
+    if lat is None:
+        await update.effective_message.reply_html(
+            "🔮 <b>Risk forecast</b>\nShare your location first (📎 → Location), then send /forecast. "
+            "I'll predict incident risk around you for the next 24 hours.")
+        return
+    model = await forecast.get_model()
+    f = model.predict(lat, lng, await get_active_zones())
+    geo = await reverse_geocode(lat, lng)
+    await update.effective_message.reply_html(forecast.report_html(f, _short_place((geo or {}).get("display_name"))),
+                                              disable_web_page_preview=True)
+
+
+async def forecast_area_html() -> str:
+    from travel_buddy.safety.store import get_incidents_with_location
+    incidents = await get_incidents_with_location(forecast.history_since())
+    model = forecast.cached_model(incidents)
+    spots = forecast.cached_hotspot_forecast(incidents, hours=6)
+    lines = ["🔮 <b>Area forecast · next 6 hours</b>",
+             f"<i>Model trained on {len(model.events)} incident report(s) from the last {forecast.HISTORY_DAYS} days.</i>", ""]
+    if spots:
+        for i, s in enumerate(spots, 1):
+            emoji = forecast.level_for(s["index"])[1]
+            kind = TYPE_LABEL.get(s["dominant_type"], s["dominant_type"])
+            lines.append(f"{emoji} <a href='{maps_link(s['lat'], s['lng'])}'>P{i}</a> · {s['level']} ({s['index']}/100) · "
+                         f"peak {s['peak']} · mostly {escape(kind)} · {round(s['p_window'] * 100)}% chance in window")
+    else:
+        lines.append("🟢 No places with elevated predicted risk in the next 6 hours.")
+    bt = forecast.cached_backtest(incidents)
+    lines += ["", "<b>Model accuracy (backtest)</b>"]
+    if bt["ready"]:
+        lines.append(f"Trained on {bt['train']} earlier reports, tested on the last {bt['test_days']} days "
+                     f"({bt['test']} reports): the top {round(bt['top_share'] * 100)}% of the area caught "
+                     f"<b>{round(bt['hit_rate'] * 100)}%</b> of incidents (PAI <b>{bt['pai']}</b>; naive pin-map "
+                     f"baseline {bt['baseline_pai']}; 1 = chance). Time-of-day skill: {bt['hour_lift']}× better "
+                     f"than guessing the hour.")
+    else:
+        lines.append(escape(bt["note"]))
+    return "\n".join(lines)
 
 
 async def phrases_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -21,6 +21,7 @@ from travel_buddy.safety.geofence import RISK_EMOJI, RISK_ORDER, evaluate_geofen
 from travel_buddy.safety.incidents import (
     TYPE_LABEL, is_admin, notify_responders, raise_incident, send_checkin, tourist_label,
 )
+from travel_buddy.safety import forecast
 from travel_buddy.safety.ledger import append_block, mask_doc
 from travel_buddy.safety.monitor import analyze_motion
 from travel_buddy.safety.risk_intel import HOTSPOT_WARN_M, get_hotspots, hotspots_near
@@ -217,9 +218,11 @@ async def ingest_location(bot, uid: int, lat: float, lng: float, trip: dict | No
 
 
 async def hotspot_warnings(uid: int, lat: float, lng: float, say: Say) -> None:
-    """Warn (at most every 6 h per hotspot) when entering or approaching a learned incident hotspot."""
+    """Warn (at most every 6 h per place) when entering or approaching a learned incident hotspot,
+    or when the predictive model expects incident risk here to be elevated now or within 3 hours."""
     near = hotspots_near(lat, lng, await get_hotspots(), within_m=HOTSPOT_WARN_M)
-    if not near:
+    model = await forecast.get_model()
+    if not near and not model.events:
         return
     state = await get_safety_state(uid)
     try:
@@ -227,6 +230,15 @@ async def hotspot_warnings(uid: int, lat: float, lng: float, say: Say) -> None:
     except ValueError:
         warned = {}
     now, changed = time.time(), False
+    if not near:
+        warning = forecast.proactive_warning(model.predict(lat, lng, hours=4))
+        key = f"F:{lat:.2f},{lng:.2f}"  # ~1 km cell
+        if warning and now - warned.get(key, 0) >= HOTSPOT_REWARN_S:
+            warned[key] = now
+            await say(warning)
+            await update_safety_state(uid, hotspot_alerts=json.dumps(
+                {k: v for k, v in warned.items() if now - v < 86400}))
+        return
     for h, d in near[:2]:
         key = f"{h['lat']:.3f},{h['lng']:.3f}"
         if now - warned.get(key, 0) < HOTSPOT_REWARN_S:

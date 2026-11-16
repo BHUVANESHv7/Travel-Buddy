@@ -22,6 +22,7 @@ from travel_buddy.core.geocoding import geocode_location
 from travel_buddy.core.tracker import (
     _active_trackers, calculate_eta_minutes, haversine_distance_meters, process_location_ping, remove_tracker,
 )
+from travel_buddy.safety import forecast
 from travel_buddy.safety import actions
 from travel_buddy.safety.geofence import (
     emergency_numbers_for, find_nearby_services, maps_link, reverse_geocode, zones_near, RISK_ORDER,
@@ -100,9 +101,12 @@ async def _overview(uid: int) -> dict:
     if lat is not None:
         hotspots = [h for h in await get_hotspots() if h["risk_level"] != "safe"
                     and haversine_distance_meters(lat, lng, h["lat"], h["lng"]) < 30000]
+    fc = ctx.get("_forecast")
     return {
         "place": ctx.get("place"),
         "score": ctx["_score"],
+        "forecast": {k: fc[k] for k in ("index", "level", "p_6h", "p_24h", "hourly", "peak", "safest", "drivers",
+                                        "confidence", "trained_on", "dominant_type")} if fc else None,
         "weather": ctx.get("_weather"),
         "local_time": ctx.get("local_time"),
         "location": {"lat": lat, "lng": lng, "seen_ts": state["last_seen_ts"]} if lat is not None else None,
@@ -177,6 +181,10 @@ def _family_fast(uid: int) -> list[dict]:
                 weather = hit[1] if hit and time.time() - hit[0] < ri.WEATHER_CACHE_S else None
                 near = ri.hotspots_near(lat, lng, hotspots, within_m=1000)
                 hot_risk = near[0][0]["risk_level"] if near else None
+            fc = None
+            model = forecast._model_cache.get("model")  # cached model only: this view must stay fast
+            if lat is not None and model is not None:
+                fc = model.predict(lat, lng, list(zones.values()), hours=6)
             score = compute_safety_score(
                 zone_risk=max((z["risk_level"] for z in inside), key=lambda r: RISK_ORDER[r], default="safe"),
                 local_hour=approx_local_hour(lng) if lng is not None else None,
@@ -184,8 +192,11 @@ def _family_fast(uid: int) -> list[dict]:
                 checkin_pending=bool(st.get("checkin_pending_ts")), has_digital_id=rec is not None,
                 has_guardian=True, location_known=bool(st.get("last_seen_ts")) and time.time() - st["last_seen_ts"] < 3600,
                 weather_risk=(weather or {}).get("worst", "none"), hotspot_risk=hot_risk,
+                forecast_level=fc["data_level"] if fc and fc["confidence"] in ("medium", "high") else None,
             )
             out.append({
+                "forecast": {"level": fc["level"], "index": fc["index"], "p_6h": fc["p_6h"],
+                             "confidence": fc["confidence"]} if fc else None,
                 "id": t, "name": rec["full_name"] if rec else (user.get("username") or f"User {t}"),
                 "tourist_id": rec["tourist_id"] if rec else None, "place": place, "score": score,
                 "location": {"lat": lat, "lng": lng, "seen_ts": st.get("last_seen_ts")} if lat is not None else None,
@@ -331,10 +342,10 @@ async def _saferoute(uid: int, b: dict) -> dict:
     weather = await get_weather_risk(g[0], g[1])
     from travel_buddy.bot.intel_handlers import _local_hour
     res = assess_route(route["path"], await store.get_active_zones(), await get_hotspots(),
-                       local_hour=_local_hour(weather, g[1]), weather=weather)
+                       local_hour=_local_hour(weather, g[1]), weather=weather, model=await forecast.get_model())
     return {"destination": dest, "resolved_as": g[2], "distance_km": round(route["distance_m"] / 1000, 1),
             "duration_min": round(route["duration_s"] / 60), "source": route["source"], "score": res["score"],
-            "verdict": res["verdict"], "reasons": res["reasons"],
+            "verdict": res["verdict"], "reasons": res["reasons"], "predicted": res.get("predicted"),
             "path": route["path"][:: max(1, len(route["path"]) // 300)],
             "directions": directions_link(state["last_lat"], state["last_lng"], g[0], g[1]),
             "weather": weather["summary"] if weather else None}

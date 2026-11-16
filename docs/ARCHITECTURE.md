@@ -71,6 +71,7 @@ travel_buddy/
 │   ├── monitor.py         # motion anomaly detection + safety score
 │   ├── incidents.py       # raise_incident, responder fan-out, community alerts, check-ins, monitor loop
 │   ├── risk_intel.py      # hotspot clustering, weather hazards, safe-route scoring
+│   ├── forecast.py        # predictive risk model (spatio-temporal forecast + backtest)
 │   └── actions.py         # channel-neutral actions shared by the bot and the website
 ├── bot/
 │   ├── handlers.py        # /start /help, trip wizard, live location pipeline, /explore, /preferences
@@ -207,8 +208,10 @@ This is a single-node, permissioned ledger. It gives tamper evidence and an audi
 | Escalation | Check-in unanswered for `SAFETY_ESCALATE_MIN` → incident + responders |
 | Hotspot | DBSCAN-style clustering, ε = 500 m, ≥ 2 incidents in 30 days; score = Σ severity × (0.3 + 0.7·e^(−age/10 d)) |
 | Weather | Thunderstorm (WMO ≥ 95), heavy rain/snow, gusts ≥ 60 km/h, fog, feels-like ≥ 35/40 °C or ≤ −5 °C |
+| Risk forecast | rate = Σ K(d; σ = 300 m) · [e^(−age/45 d)/45 + 0.3·e^(−age/3 d)/3] · P(hour | place); 180-day window; P(hour) shrunk to city profile (4 pseudo-counts) and tourist prior (12) |
+| Forecast warning | Data-driven index ≥ 40 now or within 3 h, confidence ≥ medium; once per ~1 km cell per 6 h |
 
-**Safety score** starts at 100 and subtracts points for each factor: zone risk (caution 15 / high 30 / restricted 40), late night (10), open incidents (20 each, max 2), recent anomalies (15 each, max 2), a pending check-in (20), no recent location (10), weather (5 / 15), a nearby hotspot (8 / 15), no digital ID (5) and no guardian (5).
+**Safety score** starts at 100 and subtracts points for each factor: zone risk (caution 15 / high 30 / restricted 40), late night (10), open incidents (20 each, max 2), recent anomalies (15 each, max 2), a pending check-in (20), no recent location (10), weather (5 / 15), a nearby hotspot or predicted incident risk (8 / 15, whichever is stronger), no digital ID (5) and no guardian (5).
 
 **AI triage** never lowers severity below the rule-based classifier, so an outage or a model misjudgement cannot downgrade an emergency.
 

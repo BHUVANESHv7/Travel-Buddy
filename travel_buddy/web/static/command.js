@@ -68,10 +68,11 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { map.stop(); map.invalidateSize({ pan: false }); }, 150);
   }).observe($("#map"));
-  const layers = { zones: L.layerGroup().addTo(map), hot: L.layerGroup().addTo(map),
+  const layers = { zones: L.layerGroup().addTo(map), hot: L.layerGroup().addTo(map), fc: L.layerGroup().addTo(map),
                    tour: L.layerGroup().addTo(map), inc: L.layerGroup().addTo(map) };
   L.control.layers(null, { "Geo-fence zones": layers.zones, "Learned hotspots": layers.hot,
-    "Tourists": layers.tour, "Incidents": layers.inc }, { position: "topright" }).addTo(map);
+    "Predicted risk (next 6 h)": layers.fc, "Tourists": layers.tour, "Incidents": layers.inc }, { position: "topright" }).addTo(map);
+  const FC_COLOR = { low: "#2ee59d", moderate: "#ffc857", elevated: "#ff8c42", high: "#ff4d6d" };
   const markers = { tour: new Map(), inc: new Map() };
 
   const icon = (cls, rings) => L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
@@ -137,6 +138,18 @@
     }
   };
 
+  const drawForecast = d => {
+    const places = (d.forecast && d.forecast.places) || [];
+    const sig = JSON.stringify(places.map(p => [p.lat, p.lng, p.index]));
+    if (sig === state.fcSig) return;
+    state.fcSig = sig; layers.fc.clearLayers();
+    places.forEach((p, n) => L.circle([p.lat, p.lng], { radius: 320, color: FC_COLOR[p.level] || "#b388ff", weight: 2,
+      dashArray: "6 6", fillOpacity: .1, className: "fc-zone" })
+      .bindPopup(`<div class="pop-title">🔮 Predicted P${n + 1} · ${p.level}</div><div class="pop-meta">risk ${p.index}/100 · peak ${p.peak}</div>
+        <div style="margin-top:6px">${Math.round(p.p_window * 100)}% chance of an incident report within 500 m in the next ${d.forecast.hours} h. Mostly <b>${esc(TYPE[p.dominant_type] || p.dominant_type)}</b>.</div>`)
+      .addTo(layers.fc));
+  };
+
   const fitAll = () => {
     const pts = [];
     layers.tour.eachLayer(m => pts.push(m.getLatLng()));
@@ -168,6 +181,8 @@
     const a = tabs.find(t => t.dataset.tab === name);
     ind.style.width = a.offsetWidth + "px";
     ind.style.transform = `translateX(${a.offsetLeft - 6}px)`;
+    const bar = a.parentElement;  // keep the active tab visible inside the tab scroller only
+    if (bar.scrollWidth > bar.clientWidth) bar.scrollTo({ left: Math.max(0, a.offsetLeft - (bar.clientWidth - a.offsetWidth) / 2), behavior: "smooth" });
     $("#chips").style.display = name === "incidents" ? "" : "none";
     renderList();
   }
@@ -279,6 +294,23 @@
           <div class="item-top"><b>🔥 ${h.hotspot_id}</b> ${h.count} incidents <span class="r" style="color:${RISK[h.risk_level]}">${h.risk_level}</span></div>
           <div class="item-sub">Mostly ${esc(h.dominant_type)} · risk score ${h.score}</div></div>`).join("")
         : empty("🔥", "No hotspots yet. They appear automatically once incidents cluster.");
+    } else if (state.tab === "forecast") {
+      const f = d.forecast || { places: [], accuracy: { ready: false }, trained_on: 0, hours: 6 };
+      const a = f.accuracy || { ready: false };
+      const model = `<div class="fc-model">
+        <div class="fc-model-top"><b>🔮 Predictive risk model</b><span class="r">${f.trained_on} reports · ${f.history_days || 180} days</span></div>
+        <p>Learns where and at what hours incidents happen, adds near-repeat risk after fresh reports, and retrains automatically.</p>
+        ${a.ready ? `<div class="fc-acc">
+            <div><b>${Math.round(a.hit_rate * 100)}%</b><span>of the last ${a.test_days} days' incidents fell in the top ${Math.round(a.top_share * 100)}% of the area it flagged</span></div>
+            <div><b>${a.pai}×</b><span>accuracy vs chance (PAI)<br>pin-map baseline ${a.baseline_pai}×</span></div>
+            <div><b>${a.hour_lift}×</b><span>better than guessing the hour</span></div></div>`
+          : `<p class="muted">Accuracy check: ${esc(a.note || "not enough data yet.")}</p>`}</div>`;
+      const items = f.places.filter(p => match(p.dominant_type, p.level));
+      html = model + `<h4 class="fc-h">Places to watch · next ${f.hours} h</h4>` + (items.length ? items.map((p, n) =>
+        `<div class="item" data-hot="${p.lat},${p.lng}" style="--ic:${FC_COLOR[p.level]};animation-delay:${n * 35}ms">
+          <div class="item-top"><b>🔮 P${n + 1}</b> ${esc(TYPE[p.dominant_type] || p.dominant_type)} <span class="r" style="color:${FC_COLOR[p.level]}">${p.level} · ${p.index}</span></div>
+          <div class="item-sub">Peak ${p.peak} · ${Math.round(p.p_window * 100)}% chance of a report within 500 m</div></div>`).join("")
+        : empty("🔮", f.trained_on ? "No places with elevated predicted risk in the next hours." : "The model starts forecasting once incidents with a location are reported."));
     } else {
       const ev = [];
       d.incidents.forEach(i => {
@@ -403,7 +435,7 @@
 
     // Map
     const open = d.incidents.filter(i => i.status !== "resolved");
-    drawAreas(d);
+    drawAreas(d); drawForecast(d);
     syncMarkers("tour", d.tourists, t => t.id, t => icon(`tourist${t.checkin_pending ? " pending" : ""}${state.selected === "tour:" + t.id ? " selected" : ""}`, 1), tourPopup);
     syncMarkers("inc", open, i => i.incident_id,
       i => icon(`inc sev-${i.severity}${state.selected === "inc:" + i.incident_id ? " selected" : ""}`, 3), incPopup,
@@ -419,6 +451,7 @@
     $("#c-incidents").textContent = open.length;
     $("#c-tourists").textContent = d.tourists.length;
     $("#c-hotspots").textContent = d.hotspots.filter(h => h.risk_level !== "safe").length;
+    $("#c-forecast").textContent = ((d.forecast && d.forecast.places) || []).length;
     const l = d.ledger;
     $("#ledger").innerHTML = `<span class="chain-anim${l.valid ? "" : " bad"}"><i></i><i></i><i></i><i></i></span>
       <span>${l.length} blocks · ${l.valid ? '<b style="color:#2ee59d">intact</b>' : `<b style="color:#ff4d6d">broken at #${l.broken_at}</b>`}</span>

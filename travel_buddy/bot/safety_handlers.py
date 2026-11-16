@@ -439,6 +439,11 @@ async def safety_status_handler(update: Update, context: ContextTypes.DEFAULT_TY
                      + ("" if not w["hazards"] else " — " + ", ".join(h["key"].replace("_", " ") for h in w["hazards"])))
     if live.get("nearby_hotspots"):
         lines.append(f"🔥 <b>Hotspots:</b> {escape(live['nearby_hotspots'])}")
+    fc = live.get("_forecast")
+    if fc and fc["confidence"] != "learning":
+        peak = f" · riskiest {fc['peak']['label']}" if fc.get("peak") and fc["peak"]["index"] >= 20 else ""
+        lines.append(f"🔮 <b>Forecast:</b> {fc['emoji']} {fc['level']} now · {round(fc['p_6h'] * 100)}% chance of an "
+                     f"incident nearby in 6 h{peak} (/forecast)")
     if state["checkin_pending_ts"]:
         lines.append("\n❗ <b>A safety check-in is waiting for you</b> — send /safe if you're okay.")
     await update.effective_message.reply_html("\n".join(lines))

@@ -107,7 +107,7 @@ async def answer_copilot(question: str, ctx: dict, channel: str = "telegram") ->
 def _offline_answer(ctx: dict, channel: str = "telegram") -> str:
     """Useful answer built from the live context, with no AI call (always free)."""
     parts = ["🤖 <b>Copilot (offline mode)</b> — here's your live safety picture:"]
-    for label in ("place", "safety_score", "zone", "weather", "weather_hazards", "nearby_hotspots", "trip"):
+    for label in ("place", "safety_score", "zone", "risk_forecast", "weather", "weather_hazards", "nearby_hotspots", "trip"):
         if ctx.get(label):
             parts.append(f"• <b>{label.replace('_', ' ').title()}:</b> {ctx[label]}")
     parts.append("\nTry the Trip tab's safe-route check or Nearby help. In danger → hold the SOS button."
