@@ -5,6 +5,7 @@ This document describes how Travel Buddy is organised, how data flows through it
 - [System overview](#system-overview)
 - [Package layout](#package-layout)
 - [Request flows](#request-flows)
+- [Web portal & sign-in](#web-portal--sign-in)
 - [Data model](#data-model)
 - [Blockchain ledger design](#blockchain-ledger-design)
 - [Detection and scoring rules](#detection-and-scoring-rules)
@@ -69,7 +70,8 @@ travel_buddy/
 │   ├── geofence.py        # zone enter/exit/approach, emergency numbers, Overpass service lookup
 │   ├── monitor.py         # motion anomaly detection + safety score
 │   ├── incidents.py       # raise_incident, responder fan-out, community alerts, check-ins, monitor loop
-│   └── risk_intel.py      # hotspot clustering, weather hazards, safe-route scoring
+│   ├── risk_intel.py      # hotspot clustering, weather hazards, safe-route scoring
+│   └── actions.py         # channel-neutral actions shared by the bot and the website
 ├── bot/
 │   ├── handlers.py        # /start /help, trip wizard, live location pipeline, /explore, /preferences
 │   ├── safety_handlers.py # ID, guardians, SOS, reports, E-FIR, zones, dashboard, callbacks
@@ -78,6 +80,9 @@ travel_buddy/
 └── web/
     ├── dashboard.py       # HTTP server: /command (token), /api/overview, /verify/<TID>, /ledger, /static/*
     ├── pages.py           # HTML views (server-rendered, all values escaped)
+    ├── auth.py            # passwordless Telegram sign-in (codes, magic links), sessions
+    ├── portal_api.py      # JSON API for tourists, guardians and officers
+    ├── runtime.py         # runs web actions on the bot's asyncio loop
     └── static/            # portal.css · pages.css · command.css · portal.js · command.js · favicon.svg
 ```
 
@@ -129,6 +134,32 @@ sequenceDiagram
     Note over B: Unanswered check-in after SAFETY_ESCALATE_MIN<br/>→ automatic incident → responders
 ```
 
+## Web portal & sign-in
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Web server (thread)
+    participant R as runtime.run()
+    participant A as safety.actions
+    participant T as Telegram bot
+
+    B->>W: POST /api/auth/request {@username}
+    W->>T: send 6-digit code to that Telegram chat
+    B->>W: POST /api/auth/verify {code}
+    W-->>B: Set-Cookie tb_session (HttpOnly, SameSite=Lax)
+    B->>W: POST /api/me/sos  (X-CSRF header)
+    W->>R: run coroutine on the bot's event loop
+    R->>A: trigger_sos(bot, uid)
+    A->>T: alert guardians + safety desk (same path as the /sos command)
+    W-->>B: incident, emergency numbers, nearest help
+```
+
+- **One implementation, two channels.** `safety/actions.py` holds the shared behaviour: location ingestion with geo-fences and hotspots, SOS, "I'm safe", acknowledge/resolve, E-FIR and guardian invites. The bot passes `message.reply_html` as `say`; the portal collects the notes and shows them in the browser.
+- **Threads → event loop.** The HTTP server runs in threads, while Telegram I/O lives on the bot's asyncio loop. `web/runtime.py` schedules coroutines there with `run_coroutine_threadsafe`, so web alerts use the same bot connection.
+- **Roles.** Tourist: own data. Guardian: people who linked them (`guardians` table). Officer: Telegram IDs in `ADMIN_IDS`, who can open `/command` when signed in. Every incident action re-checks `can_manage()`.
+- **Security.** No passwords. Login codes (10 min, 5 attempts, 45 s resend limit) and magic links (15 min, single use) are stored as SHA-256 hashes. Sessions are 256-bit random tokens in HttpOnly SameSite=Lax cookies. Every state change needs `X-Requested-With`, which blocks cross-site form posts, plus a per-session `X-CSRF` token. Login answers are identical whether or not an account exists, login attempts are rate-limited per client, and responses send `X-Frame-Options: DENY`.
+
 ## Data model
 
 | Table | Purpose |
@@ -144,6 +175,8 @@ sequenceDiagram
 | `geofence_zones` | Circular zones with risk level and advisory |
 | `safety_state` | Per-user live state: last location, zones, pending check-in, timer, flags, alert de-duplication |
 | `location_history` | Rolling 50-point trail per user (for E-FIR and search) |
+| `web_sessions` · `web_login_codes` · `web_magic_links` | Portal sign-in (hashed tokens only) |
+| `usage_counters` | Daily free-tier usage per service |
 
 Schema changes are applied at startup as idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN` migrations.
 

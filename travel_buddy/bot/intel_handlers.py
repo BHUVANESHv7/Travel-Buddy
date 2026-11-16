@@ -15,7 +15,6 @@ intel_handlers.py — Next-generation features of Travel Buddy Safety.
 
 import hashlib
 import io
-import json
 import logging
 import re
 import time
@@ -36,7 +35,7 @@ from travel_buddy.core.geocoding import geocode_location
 from travel_buddy.safety.geofence import RISK_EMOJI, highest_risk, maps_link, reverse_geocode
 from travel_buddy.safety.incidents import forward_media, is_admin, raise_incident, TYPE_LABEL, SEVERITY_EMOJI
 from travel_buddy.safety.risk_intel import (
-    HOTSPOT_WARN_M, assess_route, directions_link, fetch_route, get_hotspots,
+    assess_route, directions_link, fetch_route, get_hotspots,
     get_weather_risk, hotspots_near,
 )
 from travel_buddy.safety.store import (
@@ -515,31 +514,8 @@ async def web_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ═════════════════════════════════════════════
 
 async def hotspot_location_hook(update: Update, uid: int, lat: float, lng: float) -> None:
-    near = hotspots_near(lat, lng, await get_hotspots(), within_m=HOTSPOT_WARN_M)
-    if not near:
-        return
-    state = await get_safety_state(uid)
-    try:
-        warned = json.loads(state.get("hotspot_alerts") or "{}")
-    except ValueError:
-        warned = {}
-    now = time.time()
-    changed = False
-    for h, d in near[:2]:
-        key = f"{h['lat']:.3f},{h['lng']:.3f}"
-        if now - warned.get(key, 0) < HOTSPOT_REWARN_S:
-            continue
-        warned[key] = now
-        changed = True
-        where = "You're inside" if d <= 0 else f"~{d:.0f} m ahead is"
-        await update.effective_message.reply_html(
-            f"🔥 <b>Incident hotspot</b> — {where} an area with <b>{h['count']} recent "
-            f"{escape(h['dominant_type'])}</b> reports (learned automatically).\n"
-            f"💡 {HOTSPOT_TIPS.get(h['dominant_type'], 'Stay alert and keep to busy areas.')}"
-        )
-    if changed:
-        warned = {k: v for k, v in warned.items() if now - v < 86400}
-        await update_safety_state(uid, hotspot_alerts=json.dumps(warned))
+    from travel_buddy.safety.actions import hotspot_warnings
+    await hotspot_warnings(uid, lat, lng, update.effective_message.reply_html)
 
 
 # ═════════════════════════════════════════════
@@ -568,3 +544,25 @@ async def usage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     lines += ["", "Running cost: <b>₹0</b>. When a cap is reached the feature switches to its free offline "
               "mode until tomorrow; safety alerts, SOS, geo-fencing and the ledger never stop."]
     await update.effective_message.reply_html("\n".join(lines))
+
+
+# ═════════════════════════════════════════════
+#  🌐 Web portal sign-in
+# ═════════════════════════════════════════════
+
+async def login_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a one-tap, single-use link that signs the user in to their web portal."""
+    from travel_buddy.web import auth
+    user = update.effective_user
+    await upsert_user(user.id, user.username or user.first_name)
+    token = auth.issue_magic_token(user.id)
+    link = f"{public_base_url()}/auth/magic?t={token}"
+    await update.effective_message.reply_html(
+        "🌐 <b>Your Travel Buddy web portal</b>\n\n"
+        f"<a href='{link}'>👉 Tap here to sign in</a>\n\n"
+        "Everything you can do here, you can also do there: safety score & map, SOS, reports, Digital ID, "
+        "guardians, trips — and if you're a guardian, your family's live status.\n\n"
+        "<i>The link works once and expires in 15 minutes. Don't share it.</i>\n"
+        f"Or sign in at {public_base_url()}/login with a code.",
+        disable_web_page_preview=True,
+    )

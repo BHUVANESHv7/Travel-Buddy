@@ -21,12 +21,14 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from travel_buddy.core import database
-from travel_buddy.web import pages
+from travel_buddy.safety.incidents import is_admin
+from travel_buddy.web import auth, pages, portal_api, runtime
 from travel_buddy.safety.ledger import compute_identity_hash, verify_blocks
 from travel_buddy.safety.geofence import RISK_ORDER
 from travel_buddy.safety.risk_intel import HOTSPOT_DAYS, cluster_hotspots
@@ -171,8 +173,8 @@ def public_stats() -> dict:
     }
 
 
-def landing_html() -> str:
-    return pages.landing_html(public_stats())
+def landing_html(session: dict | None = None) -> str:
+    return pages.landing_html(public_stats(), signed_in=bool(session))
 
 
 def verify_html(res: dict) -> str:
@@ -200,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
         logger.debug("web %s - %s", self.address_string(), fmt % args)
 
     def _send(self, code: int, body: str | bytes, ctype: str = "text/html; charset=utf-8",
-              cache: str = "no-store") -> None:
+              cache: str = "no-store", headers: list | None = None) -> None:
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -208,12 +210,70 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        for k, v in headers or []:
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
+    def _redirect(self, location: str, headers: list | None = None) -> None:
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        for k, v in headers or []:
+            self.send_header(k, v)
+        self.end_headers()
+
     def _authorised(self, qs: dict) -> bool:
-        given = (qs.get("token") or [""])[0]
+        given = (qs.get("token") or [""])[0] or self.headers.get("X-TB-Token", "")
         return bool(given) and hmac.compare_digest(given, _token)
+
+    # ── sessions ──
+    def _cookie_token(self) -> str | None:
+        jar = SimpleCookie()
+        try:
+            jar.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return None
+        morsel = jar.get(auth.COOKIE)
+        return morsel.value if morsel else None
+
+    def _session(self) -> dict | None:
+        return auth.get_session(self._cookie_token())
+
+    def _api(self, method: str, path: str, body: dict) -> None:
+        session = self._session()
+        resp = portal_api.handle(method, path, body, session, self._authorised({}), self.client_address[0])
+        if isinstance(resp.body, dict):
+            return self._send(resp.status, json.dumps(resp.body, default=str), "application/json",
+                              headers=resp.headers)
+        return self._send(resp.status, resp.body, resp.ctype, headers=resp.headers)
+
+    def do_POST(self):  # noqa: N802
+        path = urlparse(self.path).path.rstrip("/")
+        try:
+            if not path.startswith("/api/"):
+                return self._send(404, "Not found", "text/plain")
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 64 * 1024:
+                return self._send(413, json.dumps({"ok": False, "error": "Request too large."}), "application/json")
+            # Browsers can't send this header cross-site without CORS approval → blocks form-based CSRF.
+            if self.headers.get("X-Requested-With") != "TravelBuddy":
+                return self._send(403, json.dumps({"ok": False, "error": "Forbidden."}), "application/json")
+            try:
+                body = portal_api.parse_json(self.rfile.read(length))
+            except portal_api.ApiError as exc:
+                return self._send(exc.status, json.dumps({"ok": False, "error": exc.message}), "application/json")
+            session = self._session()
+            body["_csrf_ok"] = bool(session) and hmac.compare_digest(
+                self.headers.get("X-CSRF", ""), session["csrf"])
+            if path == "/api/auth/logout":
+                auth.delete_session(self._cookie_token())
+            return self._api("POST", path, body)
+        except Exception:
+            logger.exception("Web POST failed: %s", self.path)
+            return self._send(500, json.dumps({"ok": False, "error": "Server error, please try again."}),
+                              "application/json")
 
     def do_GET(self):  # noqa: N802
         url = urlparse(self.path)
@@ -221,7 +281,26 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path.rstrip("/") or "/"
         try:
             if path == "/":
-                return self._send(200, landing_html())
+                return self._send(200, landing_html(self._session()))
+            if path == "/login":
+                if self._session():
+                    return self._redirect("/app")
+                return self._send(200, pages.login_html(runtime.bot_username()))
+            if path == "/app":
+                session = self._session()
+                if not session:
+                    return self._redirect("/login")
+                return self._send(200, pages.app_html())
+            if path == "/auth/magic":
+                uid = auth.consume_magic_token((qs.get("t") or [""])[0])
+                if not uid:
+                    return self._send(400, pages.error_html(
+                        400, "Link expired", "This sign-in link was already used or has expired. "
+                        "Send /login to the bot for a new one.", "⏳"))
+                token = auth.create_session(uid)
+                return self._redirect("/app", [("Set-Cookie", portal_api.session_cookie(token))])
+            if path.startswith("/api/") and path not in ("/api/ledger", "/api/overview"):
+                return self._api("GET", path, {})
             if path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
             if path.startswith("/verify/"):
@@ -232,12 +311,14 @@ class Handler(BaseHTTPRequestHandler):
                 chain = verify_blocks(_q("SELECT * FROM ledger ORDER BY block_index ASC"))
                 return self._send(200, json.dumps(chain), "application/json")
             if path in ("/command", "/api/overview"):
-                if not self._authorised(qs):
+                session = self._session()
+                admin_session = bool(session) and is_admin(session["uid"])
+                if not (self._authorised(qs) or admin_session):
                     return self._send(403, pages.error_html(
-                        403, "Access denied", "This command-center link is invalid or has expired. "
-                        "Ask the Travel Buddy bot for a fresh link with /web.", "🔒"))
+                        403, "Access denied", "The command center is for the safety desk. Sign in with an "
+                        "admin Telegram account, or use the private link from the bot's /web command.", "🔒"))
                 if path == "/command":
-                    return self._send(200, command_html((qs.get("token") or [""])[0]))
+                    return self._send(200, command_html(_token))
                 return self._send(200, json.dumps(build_overview(), default=str), "application/json")
             return self._send(404, pages.error_html(404, "Page not found", "This page drifted off the map.", "🧭"))
         except Exception:

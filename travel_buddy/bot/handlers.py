@@ -149,6 +149,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/weather · /hotspots — Live hazards & self-learned incident hotspots\n"
         "/phrases [language] [text] — Emergency phrases for locals\n"
         "/community on|off — Anonymous alerts about incidents near you\n"
+        "/login — 🌐 Sign in to your web portal (same features on the website)\n"
         "/web — Public verification portal (admins: live command-center map)\n\n"
         "🖥️ <b>Safety desk (admins)</b>\n"
         "/dashboard · /usage · /incidents all · /addzone · /removezone · /whereis TID\n\n"

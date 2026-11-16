@@ -33,6 +33,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
@@ -94,6 +95,10 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.02em; line-height: 1.15; }
   transition: background .2s, color .2s;
 }
 .nav-links a:hover, .nav-links a.active { color: var(--text); background: rgba(255, 255, 255, .06); }
+
+.nav-cta { margin-left: 6px; padding: 8px 16px !important; border-radius: 999px; font-weight: 700 !important; color: #04121c !important;
+  background: var(--grad); box-shadow: 0 6px 20px -8px rgba(123, 97, 255, .9); }
+.nav-cta:hover { filter: brightness(1.08); }
 
 /* ---------- surfaces ---------- */
 .card {

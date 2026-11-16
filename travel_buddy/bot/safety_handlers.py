@@ -12,9 +12,7 @@ import io
 import json
 import logging
 import re
-import secrets
 import time
-from datetime import datetime, timezone
 from html import escape
 
 from telegram import ReplyKeyboardMarkup, Update
@@ -27,24 +25,22 @@ from travel_buddy.safety.ledger import (
 )
 from travel_buddy.core.database import get_active_or_planning_trip, upsert_user
 from travel_buddy.safety.geofence import (
-    RISK_EMOJI, emergency_numbers_for, evaluate_geofence, find_nearby_services,
+    RISK_EMOJI, emergency_numbers_for, find_nearby_services,
     highest_risk, maps_link, reverse_geocode, zones_near, SERVICE_LABELS, RISK_ORDER,
 )
-from travel_buddy.safety.incidents import (
-    TYPE_LABEL, SEVERITY_EMOJI, is_admin, notify_responders, raise_incident,
-    send_checkin, tourist_label,
-)
+from travel_buddy.safety.incidents import TYPE_LABEL, SEVERITY_EMOJI, is_admin, raise_incident, tourist_label
 from travel_buddy.bot.keyboards import BTN_MYID, BTN_NEARBY, BTN_SAFETY, BTN_SOS, MAIN_KEYBOARD
 from travel_buddy.safety.store import (
-    _fetchall, _fetchone, acknowledge_incident, add_zone, create_guardian_invite,
-    deactivate_zone, get_active_zones, get_guardians, get_incident, get_location_history,
+    _fetchall, _fetchone, add_zone, deactivate_zone, get_active_zones, get_guardians, get_incident,
     get_open_incidents, get_open_user_incidents, get_safety_state, get_tourists_guarded_by,
-    get_user_incidents, is_guardian_of, link_guardian, record_location, remove_guardian,
-    resolve_incident, set_incident_location, update_safety_state,
+    get_user_incidents, is_guardian_of, link_guardian, remove_guardian, update_safety_state,
 )
-from travel_buddy.safety.ledger import append_block
+from travel_buddy.safety.actions import (
+    acknowledge_as, build_efir_text, can_manage, ingest_location, mark_safe, mark_safe_text,
+    new_guardian_invite, resolve_as, trigger_sos,
+)
 from travel_buddy.safety.monitor import (
-    analyze_motion, approx_local_hour, compute_safety_score, recent_anomaly_count, reset_motion,
+    approx_local_hour, compute_safety_score, recent_anomaly_count, reset_motion,
 )
 
 logger = logging.getLogger(__name__)
@@ -299,9 +295,7 @@ async def addguardian_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
     await upsert_user(user.id, user.username or user.first_name)
     name = " ".join(context.args).strip()[:60] if context.args else "Guardian"
-    code = secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
-    await create_guardian_invite(user.id, name, code)
-    link = f"https://t.me/{context.bot.username}?start=g_{code}"
+    link = await new_guardian_invite(user.id, name, context.bot.username)
     await update.effective_message.reply_html(
         "👨‍👩‍👧 <b>Guardian invite created</b>\n\n"
         f"Send this link to <b>{escape(name)}</b> (family member, friend, tour operator):\n{link}\n\n"
@@ -361,77 +355,9 @@ async def removeguardian_handler(update: Update, context: ContextTypes.DEFAULT_T
 async def safety_location_hook(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                lat: float, lng: float, trip: dict | None,
                                alert_already_sent: bool = False) -> None:
-    """Called for every location ping (single pin or live stream)."""
-    user_id = update.effective_user.id
-    msg = update.effective_message
-    now = time.time()
-    state = await get_safety_state(user_id)
-
-    fields = {"last_lat": lat, "last_lng": lng, "last_seen_ts": now, "inactivity_flagged": 0}
-    if state["checkin_pending_ts"] and state["checkin_reason"] == "inactivity":
-        fields.update(checkin_pending_ts=None, checkin_reason=None)
-        await msg.reply_html("📶 <b>Location signal restored</b> — safety check-in cleared. Stay safe!")
-    await update_safety_state(user_id, **fields)
-    await record_location(user_id, lat, lng, now)
-
-    # Attach location to a recent SOS that was raised without one.
-    for inc in await get_open_user_incidents(user_id):
-        if inc["incident_type"] == "sos" and inc["lat"] is None:
-            await set_incident_location(inc["incident_id"], lat, lng)
-            await notify_responders(
-                context.bot, user_id,
-                f"📍 <b>Location update for SOS #{inc['incident_id']}</b>", lat, lng, inc["incident_id"],
-            )
-            await msg.reply_html(f"📍 Location attached to SOS #{inc['incident_id']} and sent to responders.")
-
-    # ── Geo-fencing ──
-    zones = await get_active_zones()
-    events, new_zone_state = evaluate_geofence(lat, lng, zones, state["zone_state"])
-    if new_zone_state != state["zone_state"]:
-        await update_safety_state(user_id, zone_state=new_zone_state)
-    for ev in events:
-        z = ev.zone
-        emoji = RISK_EMOJI[z["risk_level"]]
-        if ev.kind == "APPROACH":
-            await msg.reply_html(
-                f"{emoji} <b>Heads-up: {escape(z['name'])}</b> is ~{ev.distance_to_edge_m:.0f} m ahead "
-                f"(<b>{z['risk_level']}</b> zone).\n{escape(z['advisory'] or '')}"
-            )
-        elif ev.kind == "ENTER":
-            await msg.reply_html(
-                f"{emoji} <b>You entered: {escape(z['name'])}</b>\n"
-                f"Risk level: <b>{z['risk_level'].upper()}</b>\n\n⚠️ {escape(z['advisory'] or 'Stay alert.')}"
-                + ("\n\n<i>Your guardians and the safety desk have been notified.</i>"
-                   if z["risk_level"] == "restricted" else
-                   "\n\n<i>Your guardians have been notified.</i>" if z["risk_level"] == "high" else "")
-            )
-            if z["risk_level"] == "restricted":
-                await raise_incident(
-                    context.bot, user_id, "geofence_breach", "medium",
-                    f"Entered restricted zone '{z['name']}'.", lat, lng, source="auto_geofence",
-                    notify_guardians=True, notify_admins=True,
-                )
-            elif z["risk_level"] == "high":
-                name, tid, _ = await tourist_label(user_id)
-                await notify_responders(
-                    context.bot, user_id,
-                    f"🟠 <b>{escape(name)}</b> entered high-risk zone <b>{escape(z['name'])}</b>.",
-                    lat, lng, guardians=True, admins=False,
-                )
-        elif ev.kind == "EXIT" and RISK_ORDER[z["risk_level"]] >= RISK_ORDER["caution"]:
-            await msg.reply_html(f"🟢 You left <b>{escape(z['name'])}</b>. Safer ground — well done.")
-
-    # ── AI behavioural anomaly detection (only meaningful during a trip) ──
-    if state["monitoring_enabled"]:
-        for anomaly in analyze_motion(user_id, lat, lng, trip, alert_already_sent, ts=now):
-            fresh = await get_safety_state(user_id)
-            if fresh["checkin_pending_ts"]:
-                continue
-            await send_checkin(context.bot, user_id, anomaly.kind, anomaly.message)
-
-    # ── Self-learning hotspots: warn when walking into an incident cluster ──
-    from travel_buddy.bot.intel_handlers import hotspot_location_hook
-    await hotspot_location_hook(update, user_id, lat, lng)
+    """Called for every location ping (single pin or live stream). Shared logic lives in actions."""
+    await ingest_location(context.bot, update.effective_user.id, lat, lng, trip, alert_already_sent,
+                          say=update.effective_message.reply_html)
 
 
 async def location_snapshot_reply(update: Update, lat: float, lng: float) -> None:
@@ -610,27 +536,7 @@ async def timer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def _mark_safe(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: int) -> str:
-    state = await get_safety_state(uid)
-    await update_safety_state(uid, checkin_pending_ts=None, checkin_reason=None, timer_due_ts=None)
-    resolved = []
-    for inc in await get_open_user_incidents(uid):
-        if inc["source"].startswith("auto_") or inc["incident_type"] == "sos":
-            await resolve_incident(inc["incident_id"], uid)
-            await append_block("INCIDENT_RESOLVED", {"incident_id": inc["incident_id"], "by": "tourist"})
-            resolved.append(inc["incident_id"])
-    if resolved:
-        name, _, _ = await tourist_label(uid)
-        await notify_responders(
-            context.bot, uid,
-            f"✅ <b>{escape(name)}</b> has confirmed they are <b>safe</b>. "
-            f"Incident(s) {', '.join('#' + str(i) for i in resolved)} closed.",
-        )
-    msg = "✅ <b>Thanks — you're marked safe.</b>"
-    if state["checkin_pending_ts"] or state["timer_due_ts"]:
-        msg += " Check-in and timer cleared."
-    if resolved:
-        msg += f"\nClosed incident(s): {', '.join('#' + str(i) for i in resolved)} and informed responders."
-    return msg
+    return mark_safe_text(await mark_safe(context.bot, uid))
 
 
 async def safe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -662,16 +568,8 @@ async def monitoring_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def sos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     await upsert_user(user.id, user.username or user.first_name)
-    lat, lng, seen = await _last_known_location(user.id)
-    fresh = seen is not None and time.time() - seen <= LOCATION_FRESH_S
-    description = "Panic button pressed."
-    if lat is not None and not fresh:
-        description += f" Location is last known ({_fmt_ago(seen)})."
-
-    incident = await raise_incident(
-        context.bot, user.id, "sos", "critical", description,
-        lat, lng, source="sos", notify_guardians=True, notify_admins=True,
-    )
+    incident = await trigger_sos(context.bot, user.id)
+    lat, lng, fresh = incident["lat"], incident["lng"], incident["fresh"]
     reach = (f"✅ <b>{incident['delivered']}</b> guardian(s)/responder(s) alerted."
              if incident["delivered"] else
              "⚠️ No guardian or safety desk could be reached — <b>call the emergency number below now.</b> "
@@ -803,8 +701,7 @@ async def incidents_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def _can_manage(uid: int, incident: dict) -> bool:
-    return (incident["telegram_id"] == uid or is_admin(uid)
-            or await is_guardian_of(uid, incident["telegram_id"]))
+    return await can_manage(uid, incident)
 
 
 async def resolve_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -821,18 +718,7 @@ async def resolve_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def _resolve_and_announce(context: ContextTypes.DEFAULT_TYPE, inc: dict, by_uid: int) -> None:
-    if inc["status"] == "resolved":
-        return
-    await resolve_incident(inc["incident_id"], by_uid)
-    role = "tourist" if by_uid == inc["telegram_id"] else "admin" if is_admin(by_uid) else "guardian"
-    await append_block("INCIDENT_RESOLVED", {"incident_id": inc["incident_id"], "by": role})
-    if by_uid != inc["telegram_id"]:
-        try:
-            await context.bot.send_message(
-                inc["telegram_id"], f"🟢 Incident #{inc['incident_id']} was marked resolved by a {role}.",
-            )
-        except Exception:
-            pass
+    await resolve_as(context.bot, inc, by_uid)
 
 
 async def efir_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -844,62 +730,7 @@ async def efir_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not inc or not await _can_manage(uid, inc):
         await update.effective_message.reply_text("Incident not found or you don't have access to it.")
         return
-    name, tid, rec = await tourist_label(inc["telegram_id"])
-    trail = await get_location_history(inc["telegram_id"], 8)
-    from travel_buddy.safety.store import get_evidence
-    evidence_rows = await get_evidence(inc["incident_id"])
-    place = ""
-    if inc["lat"] is not None:
-        geo = await reverse_geocode(inc["lat"], inc["lng"])
-        place = geo["display_name"] if geo else ""
-    coords = f"{inc['lat']:.6f}, {inc['lng']:.6f}" if inc["lat"] is not None else "not provided"
-    trail_lines = [
-        f"  {datetime.fromtimestamp(p['ts'], timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC  "
-        f"{p['lat']:.5f}, {p['lng']:.5f}" for p in trail
-    ] or ["  none recorded"]
-
-    text = "\n".join([
-        "DRAFT FIRST INFORMATION REPORT (E-FIR) — generated by Travel Buddy Safety",
-        "=" * 72,
-        f"Generated      : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-        f"Incident No.   : {inc['incident_id']}",
-        f"Category       : {TYPE_LABEL.get(inc['incident_type'], inc['incident_type'])}",
-        f"Severity       : {inc['severity'].upper()}",
-        f"Reported at    : {_fmt_date(inc['created_at'])}",
-        f"Status         : {inc['status']}",
-        "",
-        "COMPLAINANT",
-        f"  Name         : {name}",
-        f"  Tourist ID   : {tid or 'not registered'}",
-        f"  Nationality  : {rec['nationality'] if rec else '-'}",
-        f"  ID document  : {mask_doc(rec['doc_type'], rec['doc_last4']) if rec else '-'}",
-        f"  Emergency    : {(rec.get('emergency_name') or '') + ' ' + (rec.get('emergency_phone') or '') if rec else '-'}",
-        "",
-        "PLACE OF OCCURRENCE",
-        f"  Coordinates  : {coords}",
-        f"  Address      : {place or '-'}",
-        f"  Map          : {maps_link(inc['lat'], inc['lng']) if inc['lat'] is not None else '-'}",
-        "",
-        "DESCRIPTION OF INCIDENT",
-        f"  {inc['description'] or '-'}",
-        "",
-        "RECENT MOVEMENT TRAIL (latest first)",
-        *trail_lines,
-        "",
-        "INTEGRITY PROOF",
-        f"  Ledger block : {inc['block_hash'] or '-'}",
-        *[f"  Evidence #{e['evidence_id']} ({e['kind']}) SHA-256: {e['sha256']}"
-          + (f"\n      {'transcript' if e['kind'] == 'voice' else 'note'}: {e['transcript'][:200]}"
-             if e.get("transcript") else "")
-          for e in evidence_rows],
-        "  Verify       : /ledger and /verifyid in the Travel Buddy bot",
-        "",
-        "Declaration: The above information is true to the best of my knowledge.",
-        "Signature of complainant: ______________________   Date: ____________",
-        "",
-        "NOTE: This is a draft to help you file a complaint. Submit it at the nearest police station",
-        "or through the state police online portal.",
-    ])
+    text = await build_efir_text(inc)
     await update.effective_message.reply_document(
         document=io.BytesIO(text.encode("utf-8")),
         filename=f"EFIR_draft_incident_{inc['incident_id']}.txt",
@@ -932,18 +763,9 @@ async def safety_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         if not inc or not await _can_manage(uid, inc):
             await query.answer("Not authorised for this incident.", show_alert=True)
             return
-        responder = escape(query.from_user.full_name)
         if action == "ack":
-            await acknowledge_incident(inc["incident_id"], uid)
+            await acknowledge_as(context.bot, inc, uid, query.from_user.full_name)
             await query.answer("Acknowledged")
-            try:
-                await context.bot.send_message(
-                    inc["telegram_id"],
-                    f"👀 <b>{responder}</b> has seen your alert (incident #{inc['incident_id']}) and is responding.",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
             await query.message.reply_html(f"👀 You acknowledged incident #{inc['incident_id']}.")
         elif action == "res":
             await _resolve_and_announce(context, inc, uid)

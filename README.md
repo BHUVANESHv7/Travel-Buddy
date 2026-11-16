@@ -199,6 +199,7 @@ Travel-Buddy/
 │   │   ├── monitor.py          #   anomaly detection & safety score
 │   │   ├── incidents.py        #   incidents, responders, check-ins, monitor loop
 │   │   ├── risk_intel.py       #   hotspots, weather, safe routes
+│   │   ├── actions.py          #   shared actions used by both the bot and the website
 │   │   └── store.py            #   safety schema & queries
 │   ├── bot/                    # Telegram interface
 │   │   ├── handlers.py         #   start/help, trips, live location, AI guide
@@ -207,7 +208,10 @@ Travel-Buddy/
 │   │   └── keyboards.py
 │   └── web/
 │       ├── dashboard.py        # HTTP server, JSON API, data access
-│       ├── pages.py            # HTML views (landing, verify, ledger, command center)
+│       ├── pages.py            # HTML views (landing, login, portal, verify, ledger, command center)
+│       ├── auth.py             # passwordless Telegram sign-in, sessions
+│       ├── portal_api.py       # tourist / guardian / officer JSON API
+│       ├── runtime.py          # runs web actions on the bot's event loop
 │       └── static/             # Design system CSS, page scripts, favicon
 ├── tests/                      # Offline & integration test suites
 ├── docs/
@@ -314,6 +318,7 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `/ledger` | Ledger status and recent blocks |
 | `/addguardian <name>` · `/guardians` · `/removeguardian <id>` | Emergency contacts |
 | `/whereis` | Guardians: last location of the people they guard |
+| `/login` | One-tap sign-in link for your web portal |
 | `/ask <question>` *(or just type)* | AI Safety Copilot |
 | `/safetytips <place>` | AI safety briefing |
 | `/phrases [language] [text]` | Emergency phrasebook and translation |
@@ -348,13 +353,30 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 
 ## 🖥️ Web portal
 
+Every role can use the website as well as Telegram, and both share **one implementation** (`travel_buddy/safety/actions.py`), so they always behave the same.
+
+| Who | Where | What they can do on the web |
+|---|---|---|
+| 🧳 **Tourist** | `/login` → `/app` | Live safety score & map, share location / live journey tracking, **hold-to-send SOS**, "I'm safe", report incidents (AI triage), E-FIR download, Digital ID (register, QR, verify, revoke), guardians (invite, remove), trips with stop alerts, safe-route check, nearby help, safety timer, settings |
+| 👨‍👩‍👧 **Guardian / parent** | `/login` → `/app` → **Family** | Live status, location trail and safety score of each person they protect; missed check-in and SOS banners; **acknowledge / resolve** incidents (the tourist is told on Telegram); E-FIR |
+| 👮 **Officer (safety desk)** | `/login` (admin account) → `/command` | Live command-center map, incident queue with **Acknowledge / Resolve** buttons, hotspots, ledger health |
+
+**Sign-in uses the Telegram account, with no passwords.** Either:
+1. On `/login`, enter your Telegram @username, Telegram ID or Tourist ID; the bot sends a 6-digit code to your Telegram (valid 10 min, 5 attempts), **or**
+2. Send `/login` to the bot and tap the one-time link (valid 15 min, single use).
+
+Sessions are random tokens stored only as hashes, in HttpOnly SameSite cookies, with CSRF protection on every action. The login form never reveals whether an account exists.
+
 | Route | Access | Purpose |
 |---|---|---|
 | `/` | Public | Portal landing page |
+| `/login` · `/app` | Tourist / guardian sign-in | Personal safety portal |
 | `/verify/<TID>` | Public | Digital ID verification (QR code target) |
 | `/ledger` | Public | Ledger explorer (hashes only) |
-| `/command?token=…` | 🔒 Token | Live command-center map |
-| `/api/overview?token=…` | 🔒 Token | JSON feed for the command center |
+| `/command` | 🔒 Admin sign-in or token link | Live command-center map + officer actions |
+| `/api/me/*`, `/api/family`, `/api/incident/*` | 🔒 Session | JSON API behind the portal |
+
+> 📍 Browsers only share location on `localhost` or **HTTPS**. To use the portal from a phone, expose it over HTTPS (for example `ngrok http 8081`) and set `PUBLIC_BASE_URL`.
 
 <p align="center">
   <img src="docs/assets/id-verification.jpg" alt="Animated Digital Tourist ID verification page" width="720">
@@ -380,6 +402,7 @@ python tests/test_trips.py          # trip lifecycle & state transitions
 python tests/simulate_live_trip.py  # live GPS simulation: alerts, arrival, overshoot
 python tests/test_ai_guide.py       # preferences + web search grounding (needs internet)
 python tests/test_costs.py          # zero-cost guards: daily caps, AI fallback, rate limits, caches
+python tests/test_portal.py         # web portal: sign-in, CSRF, tourist & guardian actions, permissions, officer actions
 python tests/live_check.py          # LIVE end-to-end run through the real Telegram API (see below)
 ```
 

@@ -200,7 +200,9 @@
         return `<div class="item sev-${i.severity}${state.selected === key ? " sel" : ""}${i._fresh ? " fresh" : ""}" data-key="${key}" data-kind="inc" data-id="${i.incident_id}" style="animation-delay:${Math.min(n, 10) * 35}ms">
           <div class="item-top"><b>#${i.incident_id}</b> ${esc(TYPE[i.incident_type] || i.incident_type)} <span class="sev ${i.severity}">${i.severity}</span><span class="r">${ago(i.created_at)}</span></div>
           <div class="item-sub">${esc(i.name)}${i.tid ? " · " + esc(i.tid) : ""} · <span class="st ${i.status}">${i.status}</span>${i.lat == null ? " · no location" : ""}</div>
-          ${i.description ? `<div class="item-desc">${esc(i.description.slice(0, 140))}</div>` : ""}</div>`;
+          ${i.description ? `<div class="item-desc">${esc(i.description.slice(0, 140))}</div>` : ""}
+          <div class="item-acts">${i.status === "open" ? `<button class="act ack" data-act="ack" data-id="${i.incident_id}">👀 Acknowledge</button>` : ""}
+            <button class="act res" data-act="resolve" data-id="${i.incident_id}">✅ Resolve</button></div></div>`;
       }).join("") : empty("🛡️", state.q || state.sev !== "all" ? "No incidents match these filters." : "No open incidents. All quiet.");
     } else if (state.tab === "tourists") {
       const items = d.tourists.filter(t => match(t.name, t.tid, t.zone_risk))
@@ -231,7 +233,24 @@
     list.innerHTML = html;
     d.incidents.forEach(i => delete i._fresh);
   }
-  $("#list").addEventListener("click", e => {
+  $("#list").addEventListener("click", async e => {
+    const act = e.target.closest("button[data-act]");
+    if (act) {  // officer action: acknowledge / resolve (notifies the tourist on Telegram)
+      e.stopPropagation();
+      act.disabled = true;
+      try {
+        const r = await fetch(`/api/incident/${act.dataset.id}/${act.dataset.act}`, {
+          method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "TravelBuddy", "X-TB-Token": TOKEN },
+          body: "{}",
+        });
+        const body = await r.json();
+        if (!body.ok) throw new Error(body.error || "Failed");
+        notify(act.dataset.act === "ack" ? `👀 Acknowledged #${act.dataset.id}. The tourist was told help is coming.`
+                                         : `✅ Incident #${act.dataset.id} resolved and sealed on the ledger.`, "#2ee59d");
+        refresh();
+      } catch (err) { notify("⚠️ " + esc(err.message), "#ff4d6d"); act.disabled = false; }
+      return;
+    }
     const it = e.target.closest(".item"); if (!it) return;
     if (it.dataset.hot) { const [a, b] = it.dataset.hot.split(","); map.flyTo([+a, +b], 15, { duration: 1.1 }); return; }
     select(it.dataset.kind, Number(it.dataset.id));
@@ -249,6 +268,13 @@
       g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + .02); g.gain.exponentialRampToValueAtTime(0.0001, t + .18);
       o.start(t); o.stop(t + .2);
     });
+  };
+  const notify = (html, color) => {
+    const el = document.createElement("div");
+    el.className = "toast"; el.style.setProperty("--tc", color);
+    el.innerHTML = `<div><span>${html}</span></div>`;
+    $("#toasts").prepend(el);
+    setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 5000);
   };
   const toast = i => {
     const el = document.createElement("div");

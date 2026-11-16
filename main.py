@@ -114,6 +114,7 @@ BOT_COMMANDS = [
     BotCommand("hotspots", "🔥 Learned incident hotspots"),
     BotCommand("phrases", "🗣️ Emergency phrases in local language"),
     BotCommand("community", "📢 Nearby incident alerts on/off"),
+    BotCommand("login", "🌐 Sign in to your web portal"),
     BotCommand("web", "🖥️ Safety portal & command center"),
     BotCommand("explore", "AI travel recommendations"),
     BotCommand("incidents", "Your incidents"),
@@ -130,6 +131,8 @@ async def post_init(application: Application) -> None:
     except Exception as exc:
         logger.warning("Could not set bot command menu: %s", exc)
     application.bot_data["monitor_task"] = asyncio.create_task(monitor_loop(application.bot))
+    from travel_buddy.web import runtime as web_runtime
+    web_runtime.attach(asyncio.get_running_loop(), application.bot)
     if os.getenv("WEB_ENABLED", "1") != "0" and web_dashboard.start_web_server():
         admin_link = f"{web_dashboard.public_base_url()}/command?token={web_dashboard.dashboard_token()}"
         for admin_id in admin_ids():
@@ -304,6 +307,7 @@ def build_application(token: str) -> Application:
         "community": ih.community_handler,
         "web": ih.web_handler,
         "usage": ih.usage_handler,
+        "login": ih.login_handler,
     })
     for name, handler in safety_commands.items():
         app.add_handler(CommandHandler(name, handler))

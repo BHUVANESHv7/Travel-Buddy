@@ -42,7 +42,8 @@ def _nav(active: str) -> str:
             f'<a class="brand" href="/"><span class="brand-mark">{SHIELD}</span>Travel Buddy '
             f'<span class="muted" style="font-weight:500">Safety</span></a>'
             f'<div class="nav-links">{link("/#verify", "Verify ID", "verify")}'
-            f'{link("/ledger", "Ledger", "ledger")}{link("/#features", "Features", "features", " class=hide-sm")}'
+            f'{link("/ledger", "Ledger", "ledger", " class=hide-sm")}{link("/#features", "Features", "features", " class=hide-sm")}'
+            f'<a class="nav-cta" href="/login">My portal</a>'
             f'</div></div></nav>')
 
 
@@ -106,7 +107,7 @@ STEPS = [
 ]
 
 
-def landing_html(stats: dict) -> str:
+def landing_html(stats: dict, signed_in: bool = False) -> str:
     chain_ok = stats.get("chain_valid", True)
     feats = "".join(
         f'<div class="card hover feature"><div class="icon">{ic}</div><h3>{escape(t)}</h3><p>{escape(d)}</p></div>'
@@ -124,8 +125,8 @@ def landing_html(stats: dict) -> str:
       <p class="lead fade-up d2">Tourist Safety Portal for Smart Tourist Safety Monitoring &amp; Incident Response:
         AI, geo-fencing and a blockchain-based Digital ID, working together in real time.</p>
       <div class="hero-actions fade-up d3">
-        <a class="btn" href="#verify">Verify a Tourist ID</a>
-        <a class="btn ghost" href="/ledger">Explore the ledger →</a>
+        <a class="btn" href="/login">{'Open my portal' if signed_in else 'Sign in to my portal'}</a>
+        <a class="btn ghost" href="#verify">Verify a Tourist ID</a>
       </div>
       <form id="verify" class="verify-box fade-up d4" onsubmit="location.href='/verify/'+encodeURIComponent(this.t.value.trim().toUpperCase());return false">
         <input class="input" name="t" placeholder="TID-XXXXXXXXXX" aria-label="Tourist ID" autocomplete="off" required pattern="[Tt][Ii][Dd]-[0-9A-Fa-f]{{10}}">
@@ -356,3 +357,77 @@ def error_html(code: int, title: str, message: str, icon: str = "🛰️") -> st
   <a class="btn ghost fade-up d2" href="/" style="margin-top:20px">← Back to portal</a>
 </div>"""
     return layout(f"{code} {title}", body, head=pages_css())
+
+
+# ─────────────────────────────────────────────
+#  Tourist & guardian portal
+# ─────────────────────────────────────────────
+
+def login_html(bot_username: str) -> str:
+    bot = escape(bot_username)
+    body = f"""
+<div class="container auth-wrap">
+  <div class="card auth-card glow-border fade-up">
+    <div class="auth-head">
+      <span class="brand-mark big">{SHIELD}</span>
+      <h1>Sign in to your portal</h1>
+      <p class="muted">For tourists and family members. We use your Telegram account, so there's no password.</p>
+    </div>
+
+    <form id="step1" class="auth-form" autocomplete="off">
+      <label for="ident">Telegram username, Telegram ID or Tourist ID</label>
+      <input class="input" id="ident" name="ident" placeholder="@yourname  ·  1440455286  ·  TID-XXXXXXXXXX" required>
+      <button class="btn" type="submit" id="send">Send me a login code</button>
+      <p class="hint">A 6-digit code will arrive in your chat with <a href="https://t.me/{bot}" target="_blank" rel="noopener">@{bot}</a>.
+        New here? Open the bot and tap <b>START</b> first.</p>
+    </form>
+
+    <form id="step2" class="auth-form" hidden autocomplete="off">
+      <label for="code">Enter the 6-digit code from Telegram</label>
+      <input class="input code" id="code" inputmode="numeric" maxlength="6" pattern="[0-9]{{6}}" placeholder="••••••" required>
+      <button class="btn" type="submit" id="verify">Sign in</button>
+      <div class="auth-links"><button class="link-btn" type="button" id="resend">↻ Send a new code</button><button class="link-btn" type="button" id="back">← Different account</button></div>
+    </form>
+
+    <div class="auth-msg" id="msg" role="status" aria-live="polite"></div>
+
+    <div class="auth-alt">
+      <span>or</span>
+      <p>Send <code>/login</code> to <a href="https://t.me/{bot}" target="_blank" rel="noopener">@{bot}</a> and tap the one-time link.</p>
+    </div>
+  </div>
+</div>"""
+    script = f'<script src="{asset("login.js")}" defer></script>'
+    return layout("Sign in", body, head=f'<link rel="stylesheet" href="{asset("app.css")}">', scripts=script)
+
+
+def app_html() -> str:
+    head = ('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+            f'<link rel="stylesheet" href="{asset("app.css")}">')
+    body = f"""
+<div class="portal">
+  <header class="p-top">
+    <a class="brand" href="/"><span class="brand-mark">{SHIELD}</span><span class="hide-xs">Travel Buddy</span></a>
+    <div class="p-user" id="who"><span class="skel-line"></span></div>
+    <a class="btn ghost sm" id="desk-link" href="/command" hidden>🖥️ Command center</a>
+    <button class="icon-btn" id="logout" title="Sign out" aria-label="Sign out">
+      <svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l-5-5 5-5M5 12h12"/></svg></button>
+  </header>
+
+  <nav class="p-tabs" id="tabs" role="tablist">
+    <button data-tab="home" class="active">🛡️<span>Safety</span></button>
+    <button data-tab="trip">🚆<span>Trip</span></button>
+    <button data-tab="incidents">🚨<span>Incidents</span></button>
+    <button data-tab="id">🪪<span>My ID</span></button>
+    <button data-tab="guardians">👨‍👩‍👧<span>Guardians</span></button>
+    <button data-tab="family" id="family-tab" hidden>👪<span>Family</span></button>
+    <button data-tab="settings">⚙️<span>Settings</span></button>
+  </nav>
+
+  <main class="p-main" id="view"><div class="p-loading"><div class="spinner"></div>Loading your safety picture…</div></main>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<dialog id="dlg"></dialog>"""
+    scripts = ('<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+               f'<script src="{asset("app.js")}"></script>')
+    return layout("My Safety Portal", body, head=head, scripts=scripts, body_class="portal-body", chrome=False)
