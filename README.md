@@ -33,6 +33,7 @@ A Telegram travel companion that keeps tourists safe in real time. It tracks jou
 - [Quick start](#-quick-start)
 - [Running cost: ₹0](#-running-cost-0)
 - [Configuration](#%EF%B8%8F-configuration)
+- [Deployment](#-deployment)
 - [Command reference](#-command-reference)
 - [Web portal](#-web-portal)
 - [Testing](#-testing)
@@ -213,11 +214,22 @@ Travel-Buddy/
 │       ├── portal_api.py       # tourist / guardian / officer JSON API
 │       ├── runtime.py          # runs web actions on the bot's event loop
 │       └── static/             # Design system CSS, page scripts, favicon
+│   └── config.py               # start-up configuration checks
+├── scripts/
+│   ├── preflight.py            # pre-deployment check (config, database, token, port)
+│   ├── backup_db.py            # online SQLite backup with rotation
+│   └── run_tests.py            # runs every offline test suite
+├── deploy/
+│   ├── travel-buddy.service    # systemd unit (Linux server without Docker)
+│   └── Caddyfile               # reverse proxy with automatic HTTPS
 ├── tests/                      # Offline & integration test suites
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── DEPLOYMENT.md
 │   └── assets/
-├── requirements.txt
+├── .github/workflows/ci.yml    # lint + tests on every push
+├── Dockerfile · docker-compose.yml
+├── requirements.txt            # exact pinned versions
 └── .env.example
 ```
 
@@ -250,17 +262,20 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env        # Windows: copy .env.example .env
-# edit .env and set BOT_TOKEN (and GROQ_API_KEY, ADMIN_IDS)
+# edit .env and set BOT_TOKEN and ADMIN_IDS (GROQ_API_KEY is optional)
+python scripts/preflight.py # checks the setup before you start
 python main.py
 ```
 
 Open your bot in Telegram and send `/start`. The web portal starts at **http://localhost:8080**.
 
-### Five-minute demo
+A fresh database contains **no sample data**: the safety desk adds the real risk zones with `/addzone` or the **Desk** tab of the command center. For a quick demo on a fresh database, set `SEED_STARTER_ZONES=1` once to load five sample zones (Kaziranga, Nathu La, Cherrapunji, Tawang, Jaipur Old City).
+
+### Five-minute tour
 
 1. `/registerid` → you get a Digital Tourist ID and a QR code.
 2. `/addguardian Mum` → open the invite link from a second Telegram account.
-3. `/newtrip`, then share a location near `26.45, 93.17`. You'll get a restricted-zone alert (Kaziranga), and the guardian is notified with a map pin.
+3. As an admin, add a zone (`/addzone restricted 3000 <lat> <lng> Test area | Permit only`), then share a location inside it. You get a restricted-zone alert, and the guardian is notified with a map pin.
 4. Tap **🆘 SOS**. The guardian taps **👀 Acknowledge**, and you see that they're responding.
 5. Send a photo captioned *"my bag was snatched"*. It's sealed as evidence. Then run `/efir <id>`.
 6. Put your Telegram ID in `ADMIN_IDS`, restart, and open the command-center link the bot sends you.
@@ -280,12 +295,32 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `SAFETY_INACTIVITY_MIN` | | `30` | Minutes without location during a trip before a check-in |
 | `SAFETY_ESCALATE_MIN` | | `15` | Minutes to answer a check-in before responders are alerted |
 | `WEB_ENABLED` | | `1` | Set to `0` to disable the web portal |
-| `WEB_HOST` / `WEB_PORT` | | `127.0.0.1` / `8080` | Web portal bind address (if the port is busy, the next free port is used automatically and shown in the log) |
+| `WEB_HOST` / `WEB_PORT` | | `127.0.0.1` / `8080` | Web portal bind address |
+| `WEB_PORT_FALLBACK` | | `1` | `1`: if the port is busy, use the next free one (laptop). `0`: fail instead (servers, Docker) |
+| `TRUST_PROXY` | | `0` | Set to `1` behind Caddy / nginx / Cloudflare Tunnel so rate limits see real visitor IPs |
 | `DASHBOARD_TOKEN` | | random | Secret for the command-center link. If unset, one is generated once, stored in the database (kept across restarts) and sent to admins at start-up |
-| `PUBLIC_BASE_URL` | | `http://localhost:8080` | Public URL used in QR codes (e.g. an ngrok or server URL) |
+| `PUBLIC_BASE_URL` | | `http://localhost:8080` | Public HTTPS URL used in QR codes and sign-in links. `https://` also turns on Secure cookies and HSTS |
 | `DATABASE_PATH` | | `./travel_bot.db` | SQLite database location |
+| `LOG_FILE` · `LOG_LEVEL` | | `travel_buddy.log` · `INFO` | Rotating log file (5 × 2 MB); empty `LOG_FILE` = console only |
+| `SEED_STARTER_ZONES` | | `0` | `1` loads five sample zones into an empty database (demos only) |
 | `AI_DAILY_LIMIT` | | `300` | Max Groq AI calls per day (then offline mode) |
 | `WEATHER_DAILY_LIMIT` · `ROUTING_DAILY_LIMIT` · `PLACES_DAILY_LIMIT` | | `5000` · `500` · `2000` | Daily caps for the other free services |
+
+---
+
+## 🚢 Deployment
+
+Travel Buddy is one process (bot + web portal + safety monitor) with one SQLite file, so it runs on any small machine, including free tiers. Full guide: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
+```bash
+python scripts/preflight.py          # must say READY
+docker compose up -d --build         # or: deploy/travel-buddy.service with systemd
+```
+
+- **Health check:** `GET /healthz` returns `200` when the database and the bot are up (used by Docker's `HEALTHCHECK`)
+- **HTTPS:** put the portal behind [Caddy](deploy/Caddyfile) or a free Cloudflare Tunnel, set `PUBLIC_BASE_URL=https://…` and `TRUST_PROXY=1`
+- **Backups:** `python scripts/backup_db.py` takes a consistent snapshot while running; schedule it daily
+- **Logs:** rotate automatically; the command-center secret is never written to them
 
 ---
 
@@ -403,10 +438,12 @@ python tests/simulate_live_trip.py  # live GPS simulation: alerts, arrival, over
 python tests/test_ai_guide.py       # preferences + web search grounding (needs internet)
 python tests/test_costs.py          # zero-cost guards: daily caps, AI fallback, rate limits, caches
 python tests/test_portal.py         # web portal: sign-in, CSRF, tourist & guardian actions, permissions, officer actions
+python tests/test_deploy.py         # production readiness: config checks, clean database, /healthz, proxy IPs, backups
+python scripts/run_tests.py         # all of the above in one go (also runs in GitHub Actions)
 python tests/live_check.py          # LIVE end-to-end run through the real Telegram API (see below)
 ```
 
-The safety and intelligence suites run fully offline against a temporary database. No test touches your real `travel_bot.db`.
+The safety and intelligence suites run fully offline against a temporary database. No test touches your real `travel_bot.db`; the live check also uses a temporary database unless you pass `--real-db`.
 
 **Live end-to-end check.** After pressing **Start** in your bot once, `tests/live_check.py` sends a scripted session through the bot's real handlers: 40 checks covering ID registration with QR, geo-fencing, live journey tracking and arrival, reports, E-FIR, SOS, admin dashboard and the AI guide. Every reply is delivered to your Telegram chat in real time, and every Bot API call is verified. It uses the first ID in `ADMIN_IDS`, or `--chat-id`.
 
@@ -418,7 +455,8 @@ The safety and intelligence suites run fully offline against a temporary databas
 - **Ledger holds no personal data:** blocks contain IDs, hashes, types and severities only
 - **Tamper evidence:** chain re-verification plus identity-hash comparison against the database
 - **Least exposure:** community alerts are anonymous with approximate distance; the command center needs a secret token; the portal binds to localhost by default
-- **Secrets stay local:** `.env`, the database and logs are git-ignored
+- **Secrets stay local:** `.env`, the database and logs are git-ignored; the command-center token is masked in logs
+- **Hardened web server:** CSRF header + token on every action, HttpOnly SameSite cookies (Secure + HSTS on HTTPS), request size limits, per-IP rate limits, `X-Frame-Options: DENY`
 
 > ⚠️ Travel Buddy supports, but does not replace, official emergency services. In danger, always call the local emergency number (e.g. **112** in India).
 

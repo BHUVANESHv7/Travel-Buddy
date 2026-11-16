@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Stored in the project root by default; override with DATABASE_PATH in .env
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = os.getenv("DATABASE_PATH", str(PROJECT_ROOT / "travel_bot.db"))
+DB_PATH = os.getenv("DATABASE_PATH") or str(PROJECT_ROOT / "travel_bot.db")  # empty value = default
 
 
 async def init_db() -> None:

@@ -12,6 +12,7 @@ Run:  python main.py
 
 import asyncio
 import logging
+import logging.handlers
 import os
 import re
 import sys
@@ -30,6 +31,7 @@ from telegram.ext import (
     filters,
 )
 
+from travel_buddy.config import check_config
 from travel_buddy.core.database import init_db
 from travel_buddy.bot.handlers import (
     start_handler,
@@ -73,14 +75,22 @@ from travel_buddy.safety.store import init_safety_db
 #  Logging configuration
 # ─────────────────────────────────────────────
 
+def _log_handlers() -> list[logging.Handler]:
+    """Console always; plus a rotating file (5 x 2 MB) unless LOG_FILE is set to an empty value."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    log_file = os.getenv("LOG_FILE", "travel_buddy.log").strip()
+    if log_file:
+        os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+        handlers.append(logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"))
+    return handlers
+
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s | %(levelname)-8s | %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("travel_buddy.log", encoding="utf-8"),
-    ],
+    handlers=_log_handlers(),
 )
 
 # Suppress noisy third-party logs
@@ -153,16 +163,14 @@ async def post_shutdown(application: Application) -> None:
 
 
 def main() -> None:
-    # 1. Load environment variables
-    load_dotenv()
-    token = os.getenv("BOT_TOKEN")
-
-    if not token or token == "your_telegram_bot_token_here":
-        logger.critical(
-            "BOT_TOKEN is not set or is still the default placeholder.\n"
-            "  → Please open .env and set your token from @BotFather."
-        )
+    # 1. Validate configuration (.env is already loaded at import time)
+    problems = check_config()
+    for level, message in problems:
+        (logger.critical if level == "error" else logger.warning)("Config: %s", message)
+    if any(level == "error" for level, _ in problems):
+        logger.critical("Fix the configuration above (see .env.example), then start again.")
         sys.exit(1)
+    token = os.environ["BOT_TOKEN"].strip()
 
     logger.info("Travel Buddy Bot starting up…")
     app = build_application(token)

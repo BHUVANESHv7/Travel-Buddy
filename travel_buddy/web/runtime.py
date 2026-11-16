@@ -44,6 +44,11 @@ def bot():
     return _bot or NullBot()
 
 
+def is_attached() -> bool:
+    """True while the Telegram bot's event loop is running (used by the /healthz probe)."""
+    return _loop is not None and _loop.is_running() and _bot is not None
+
+
 def bot_username() -> str:
     return getattr(bot(), "username", None) or NullBot.username
 

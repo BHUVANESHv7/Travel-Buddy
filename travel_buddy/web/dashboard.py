@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from travel_buddy.config import env_int
 from travel_buddy.core import database
 from travel_buddy.safety.incidents import is_admin
 from travel_buddy.web import auth, pages, portal_api, runtime
@@ -65,12 +66,15 @@ def dashboard_token() -> str:
     return _token
 
 
+_TRUST_PROXY = os.getenv("TRUST_PROXY", "0") == "1"
+_HTTPS = os.getenv("PUBLIC_BASE_URL", "").startswith("https://")
+
 _bound_port: int | None = None  # the port actually in use (may differ from WEB_PORT if it was busy)
 
 
 def public_base_url() -> str:
-    port = _bound_port or int(os.getenv("WEB_PORT", "8080"))
-    return os.getenv("PUBLIC_BASE_URL", f"http://localhost:{port}").rstrip("/")
+    port = _bound_port or env_int("WEB_PORT", 8080)
+    return (os.getenv("PUBLIC_BASE_URL") or f"http://localhost:{port}").rstrip("/")
 
 
 # ─────────────────────────────────────────────
@@ -238,6 +242,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
+        if _HTTPS:
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
         for k, v in headers or []:
             self.send_header(k, v)
         self.end_headers()
@@ -271,9 +277,18 @@ class Handler(BaseHTTPRequestHandler):
     def _session(self) -> dict | None:
         return auth.get_session(self._cookie_token())
 
+    def _client_ip(self) -> str:
+        """Real client address. Behind a reverse proxy / tunnel (TRUST_PROXY=1) every request comes
+        from the proxy, so per-visitor rate limits use the X-Forwarded-For address instead."""
+        if _TRUST_PROXY:
+            fwd = (self.headers.get("X-Forwarded-For") or self.headers.get("CF-Connecting-IP") or "").split(",")[0].strip()
+            if fwd:
+                return fwd[:64]
+        return self.client_address[0]
+
     def _api(self, method: str, path: str, body: dict) -> None:
         session = self._session()
-        resp = portal_api.handle(method, path, body, session, self._authorised({}), self.client_address[0])
+        resp = portal_api.handle(method, path, body, session, self._authorised({}), self._client_ip())
         if isinstance(resp.body, dict):
             return self._send(resp.status, json.dumps(resp.body, default=str), "application/json",
                               headers=resp.headers)
@@ -312,6 +327,8 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(url.query)
         path = url.path.rstrip("/") or "/"
         try:
+            if path in ("/healthz", "/health"):
+                return self._health()
             if path == "/":
                 return self._send(200, landing_html(self._session()))
             if path == "/login":
@@ -360,6 +377,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, pages.error_html(500, "Something went wrong", "Please try again in a moment.", "⚠️"))
 
 
+    def _health(self):
+        """Liveness/readiness probe for Docker, uptime monitors and load balancers."""
+        checks = {"web": True, "bot": runtime.is_attached()}
+        try:
+            _q("SELECT 1 FROM ledger LIMIT 1")
+            checks["database"] = True
+        except sqlite3.Error:
+            checks["database"] = False
+        ok = checks["database"] and checks["bot"]
+        return self._send(200 if ok else 503, json.dumps({"ok": ok, **checks}), "application/json")
+
     def _static(self, name: str):
         # Only serve plain file names that exist in STATIC_DIR (no sub-paths, no traversal).
         if "/" in name or "\\" in name or name.startswith(".") or not (STATIC_DIR / name).is_file():
@@ -392,8 +420,11 @@ def start_web_server(host: str | None = None, port: int | None = None) -> Thread
     """Start the portal; if the port is busy or blocked, try the next ones (8080 → 8081 → …)."""
     global _server, _bound_port
     host = host or os.getenv("WEB_HOST", "127.0.0.1")
-    first = port if port is not None else int(os.getenv("WEB_PORT", "8080"))
-    candidates = [first] if first == 0 else range(first, first + PORT_FALLBACK_TRIES)
+    first = port if port is not None else env_int("WEB_PORT", 8080)
+    # Fallback to the next free port is handy on a laptop; on a server (WEB_PORT_FALLBACK=0) a proxy
+    # expects the exact port, so fail loudly instead.
+    tries = PORT_FALLBACK_TRIES if os.getenv("WEB_PORT_FALLBACK", "1") != "0" else 1
+    candidates = [first] if first == 0 else range(first, first + tries)
     last_exc = None
     for p in candidates:
         try:
@@ -403,13 +434,15 @@ def start_web_server(host: str | None = None, port: int | None = None) -> Thread
             last_exc = exc
     else:
         logger.warning("Web command center not started (%s:%s-%s): %s",
-                       host, first, first + PORT_FALLBACK_TRIES - 1, last_exc)
+                       host, first, first + tries - 1, last_exc)
         return None
     _bound_port = _server.server_address[1]
     if first and _bound_port != first:
         logger.warning("Port %s is in use by another program; web portal moved to port %s.", first, _bound_port)
     threading.Thread(target=_server.serve_forever, name="web-dashboard", daemon=True).start()
-    logger.info("Web command center: %s/command?token=%s", public_base_url(), _token)
+    # Never write the full secret to log files: admins receive the complete link on Telegram.
+    logger.info("Web portal: %s  (command center: /command?token=%s…, full link sent to admins)",
+                public_base_url(), _token[:4])
     return _server
 
 

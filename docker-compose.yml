@@ -1,0 +1,20 @@
+# docker compose up -d --build     → start (restarts automatically after crashes/reboots)
+# docker compose logs -f           → follow logs
+# docker compose exec bot python scripts/backup_db.py   → snapshot the database into /data/backups
+services:
+  bot:
+    build: .
+    container_name: travel-buddy
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/travel_bot.db
+      LOG_FILE: /data/logs/travel_buddy.log
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8080"
+      WEB_PORT_FALLBACK: "0"
+    volumes:
+      - ./data:/data
+    ports:
+      # Bound to localhost only: publish it through a reverse proxy or Cloudflare Tunnel (HTTPS).
+      - "127.0.0.1:8080:8080"

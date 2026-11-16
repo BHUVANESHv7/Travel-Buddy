@@ -26,6 +26,7 @@ from urllib.request import urlopen
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+os.environ["SEED_STARTER_ZONES"] = "1"  # tests use the starter zones
 os.environ["ADMIN_IDS"] = "9001"
 os.environ["GROQ_API_KEY"] = ""
 os.environ["DASHBOARD_TOKEN"] = "test-token-123"

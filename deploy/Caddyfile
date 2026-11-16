@@ -1,0 +1,7 @@
+# Caddy reverse proxy with automatic free HTTPS (Let's Encrypt).
+# Replace the domain, point its DNS A record at the server, then:  sudo caddy run --config deploy/Caddyfile
+# In .env set:  PUBLIC_BASE_URL=https://safety.your-domain.org  and  TRUST_PROXY=1
+safety.your-domain.org {
+    encode gzip
+    reverse_proxy 127.0.0.1:8080
+}

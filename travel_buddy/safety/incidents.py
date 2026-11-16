@@ -21,6 +21,7 @@ from html import escape
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
+from travel_buddy.config import env_int
 from travel_buddy.safety.ledger import append_block, get_active_tourist_id
 from travel_buddy.core.database import get_active_or_planning_trip, get_user
 from travel_buddy.safety.geofence import maps_link
@@ -34,8 +35,8 @@ from travel_buddy.core.tracker import haversine_distance_meters
 logger = logging.getLogger(__name__)
 
 MONITOR_INTERVAL_S = 60
-INACTIVITY_S = float(os.getenv("SAFETY_INACTIVITY_MIN", "30")) * 60
-ESCALATE_S = float(os.getenv("SAFETY_ESCALATE_MIN", "15")) * 60
+INACTIVITY_S = env_int("SAFETY_INACTIVITY_MIN", 30) * 60
+ESCALATE_S = env_int("SAFETY_ESCALATE_MIN", 15) * 60
 
 SEVERITY_EMOJI = {"low": "🔵", "medium": "🟡", "high": "🟠", "critical": "🔴"}
 TYPE_LABEL = {

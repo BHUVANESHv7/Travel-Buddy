@@ -13,11 +13,11 @@ This module enforces them so the bot never needs a paid plan and never gets bloc
 
 import asyncio
 import logging
-import os
 import sqlite3
 import time
 from datetime import datetime, timezone
 
+from travel_buddy.config import env_int
 from travel_buddy.core import database
 
 logger = logging.getLogger(__name__)
@@ -26,10 +26,10 @@ USER_AGENT = "TravelBuddySafetyBot/2.0 (+https://github.com/BHUVANESHv7/Travel-B
 
 # Daily caps, kept well below each provider's free limits. Override in .env.
 DAILY_LIMITS = {
-    "ai": int(os.getenv("AI_DAILY_LIMIT", "300")),            # Groq chat + voice calls
-    "weather": int(os.getenv("WEATHER_DAILY_LIMIT", "5000")),  # Open-Meteo (free < 10,000/day)
-    "routing": int(os.getenv("ROUTING_DAILY_LIMIT", "500")),   # OSRM public demo server
-    "places": int(os.getenv("PLACES_DAILY_LIMIT", "2000")),    # Overpass + Nominatim searches
+    "ai": env_int("AI_DAILY_LIMIT", 300),            # Groq chat + voice calls
+    "weather": env_int("WEATHER_DAILY_LIMIT", 5000),  # Open-Meteo (free < 10,000/day)
+    "routing": env_int("ROUTING_DAILY_LIMIT", 500),   # OSRM public demo server
+    "places": env_int("PLACES_DAILY_LIMIT", 2000),    # Overpass + Nominatim searches
 }
 
 

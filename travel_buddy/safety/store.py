@@ -13,6 +13,7 @@ Tables:
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -24,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 LOCATION_HISTORY_LIMIT = 50  # rows kept per user
 
-# Demo zones so geo-fencing works out of the box. Authorities add real ones with /addzone.
-SEED_ZONES = [
+# Optional starter advisory zones. Production starts with NO zones: the safety desk adds the
+# real ones (/addzone in Telegram or the Desk tab of the command center). Set
+# SEED_STARTER_ZONES=1 to load these into an empty database for a demo or the test suites.
+STARTER_ZONES = [
     ("Kaziranga National Park (core area)", 26.5775, 93.1711, 15000, "restricted",
      "Protected wildlife area. Entry only with an authorised guide and permit; stay inside vehicles."),
     ("Nathu La Pass (permit area)", 27.3863, 88.8306, 5000, "restricted",
@@ -177,14 +180,14 @@ async def init_safety_db() -> None:
 
         async with db.execute("SELECT COUNT(*) FROM geofence_zones") as cur:
             (zone_count,) = await cur.fetchone()
-        if zone_count == 0:
+        if zone_count == 0 and os.getenv("SEED_STARTER_ZONES", "0") == "1":
             await db.executemany(
                 """INSERT INTO geofence_zones
                    (name, center_lat, center_lng, radius_m, risk_level, advisory, created_by, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)""",
-                [(*z, now_iso()) for z in SEED_ZONES],
+                [(*z, now_iso()) for z in STARTER_ZONES],
             )
-            logger.info("Seeded %d demo geo-fence zones.", len(SEED_ZONES))
+            logger.info("Loaded %d starter geo-fence zones (SEED_STARTER_ZONES=1).", len(STARTER_ZONES))
         await db.commit()
     logger.info("Safety tables initialised.")
 

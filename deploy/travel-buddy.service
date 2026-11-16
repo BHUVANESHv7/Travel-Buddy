@@ -1,0 +1,30 @@
+# systemd unit for a Linux server without Docker.
+#   sudo cp deploy/travel-buddy.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now travel-buddy
+#   journalctl -u travel-buddy -f
+# Assumes the project lives in /opt/travel-buddy with a venv in /opt/travel-buddy/venv
+# and runs as a dedicated user:  sudo useradd --system --home /opt/travel-buddy travelbuddy
+[Unit]
+Description=Travel Buddy - tourist safety bot and web portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=travelbuddy
+WorkingDirectory=/opt/travel-buddy
+EnvironmentFile=/opt/travel-buddy/.env
+Environment=PYTHONUNBUFFERED=1 WEB_PORT_FALLBACK=0
+ExecStartPre=/opt/travel-buddy/venv/bin/python scripts/preflight.py --offline
+ExecStart=/opt/travel-buddy/venv/bin/python main.py
+Restart=always
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/travel-buddy
+
+[Install]
+WantedBy=multi-user.target

@@ -37,6 +37,7 @@ load_dotenv(_Path(__file__).resolve().parents[1] / ".env")
 if "--real-db" not in sys.argv:
     import tempfile as _tempfile
     os.environ["DATABASE_PATH"] = os.path.join(_tempfile.mkdtemp(), "live_check.db")
+    os.environ["SEED_STARTER_ZONES"] = "1"  # sample zones so the geo-fence steps have something to hit
 
 from telegram import Update
 from telegram.ext import ExtBot

@@ -22,6 +22,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))  # make `travel_b
 
 import asyncio
 import os
+os.environ["SEED_STARTER_ZONES"] = "1"  # tests use the starter zones
 import sys
 import time
 
