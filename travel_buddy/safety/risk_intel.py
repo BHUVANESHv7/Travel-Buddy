@@ -52,17 +52,42 @@ def _incident_age_days(inc: dict, now: datetime) -> float:
         return HOTSPOT_DAYS
 
 
+def _neighbours(pts: list[dict], eps_m: float) -> list[list[int]]:
+    """Indices within eps_m of each point, using a spatial grid (≈O(n) instead of O(n²)).
+
+    Points are bucketed into eps_m-sized cells of an equirectangular projection; only the 3×3
+    surrounding cells are checked with the exact haversine distance. One shared east-west scale
+    (taken at the highest latitude) means projected distances never exceed true ones, so no
+    neighbour can be missed. Data crossing the ±180° meridian falls back to the exact O(n²) scan.
+    """
+    if not pts:
+        return []
+    lngs = [p["lng"] for p in pts]
+    if max(lngs) - min(lngs) > 180:  # straddles the antimeridian
+        return [[j for j, b in enumerate(pts) if haversine_distance_meters(a["lat"], a["lng"], b["lat"], b["lng"]) <= eps_m]
+                for a in pts]
+    m_per_deg = 111_320.0
+    m_per_deg_lng = m_per_deg * max(0.01, min(math.cos(math.radians(p["lat"])) for p in pts))
+    grid: dict[tuple[int, int], list[int]] = {}
+    keys = []
+    for i, p in enumerate(pts):
+        key = (int(math.floor(p["lat"] * m_per_deg / eps_m)), int(math.floor(p["lng"] * m_per_deg_lng / eps_m)))
+        keys.append(key)
+        grid.setdefault(key, []).append(i)
+    out = []
+    for i, (cy, cx) in enumerate(keys):
+        a = pts[i]
+        out.append([j for dy in (-1, 0, 1) for dx in (-1, 0, 1) for j in grid.get((cy + dy, cx + dx), ())
+                    if haversine_distance_meters(a["lat"], a["lng"], pts[j]["lat"], pts[j]["lng"]) <= eps_m])
+    return out
+
 def cluster_hotspots(incidents: list[dict], eps_m: float = HOTSPOT_EPS_M,
                      min_points: int = HOTSPOT_MIN_POINTS, now: datetime | None = None) -> list[dict]:
     """Density clustering of incident locations. Returns hotspots sorted by risk score."""
     now = now or datetime.now(timezone.utc)
     pts = [i for i in incidents if i.get("lat") is not None and i.get("lng") is not None]
     n = len(pts)
-    neighbours = [
-        [j for j in range(n)
-         if haversine_distance_meters(pts[i]["lat"], pts[i]["lng"], pts[j]["lat"], pts[j]["lng"]) <= eps_m]
-        for i in range(n)
-    ]
+    neighbours = _neighbours(pts, eps_m)
     labels = [None] * n
     cluster_id = 0
     for i in range(n):
@@ -103,22 +128,33 @@ def cluster_hotspots(incidents: list[dict], eps_m: float = HOTSPOT_EPS_M,
     return sorted(hotspots, key=lambda h: -h["score"])
 
 
-_hotspot_cache: dict = {"ts": 0.0, "data": []}
-HOTSPOT_CACHE_S = 300
+_hotspot_cache: dict = {"key": None, "ts": 0.0, "data": []}
+HOTSPOT_CACHE_S = 120  # recompute at least this often (recency weights decay over time)
+HOTSPOT_FRESH_S = 30   # reuse without even re-reading incidents within this window
+
+
+def cached_hotspots(incidents: list[dict]) -> list[dict]:
+    """cluster_hotspots() with a cache keyed on the incident set (shared by bot and web portal)."""
+    key = (len(incidents), max((i.get("incident_id") or 0 for i in incidents), default=0))
+    if key == _hotspot_cache["key"] and time.time() - _hotspot_cache["ts"] < HOTSPOT_CACHE_S:
+        return _hotspot_cache["data"]
+    data = cluster_hotspots(incidents)
+    _hotspot_cache.update(key=key, ts=time.time(), data=data)
+    return data
 
 
 async def get_hotspots(force: bool = False) -> list[dict]:
     from travel_buddy.safety.store import get_incidents_with_location  # local import avoids cycles
-    if not force and time.time() - _hotspot_cache["ts"] < HOTSPOT_CACHE_S:
-        return _hotspot_cache["data"]
+    if force:
+        invalidate_hotspots()
+    elif _hotspot_cache["key"] is not None and time.time() - _hotspot_cache["ts"] < HOTSPOT_FRESH_S:
+        return _hotspot_cache["data"]  # skip re-reading incidents; new incidents invalidate the cache
     since = (datetime.now(timezone.utc) - timedelta(days=HOTSPOT_DAYS)).isoformat()
-    data = cluster_hotspots(await get_incidents_with_location(since))
-    _hotspot_cache.update(ts=time.time(), data=data)
-    return data
+    return cached_hotspots(await get_incidents_with_location(since))
 
 
 def invalidate_hotspots() -> None:
-    _hotspot_cache["ts"] = 0.0
+    _hotspot_cache["key"] = None
 
 
 def hotspots_near(lat: float, lng: float, hotspots: list[dict], within_m: float) -> list[tuple[dict, float]]:

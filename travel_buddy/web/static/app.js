@@ -304,7 +304,7 @@
         ${p.checkin_pending ? '<div class="alert-bar">⏳<b>Missed safety check-in — they haven\'t answered yet.</b></div>' : ""}
         ${open.some(i => i.severity === "critical") ? '<div class="alert-bar">🆘<b>Active SOS — act now.</b></div>' : ""}
         <div class="person"><div>
-          <h2>${esc(p.name)}</h2><p class="sub">${p.tourist_id ? esc(p.tourist_id) + " · " : ""}${p.place ? "📍 " + esc(p.place) : "no location yet"}</p>
+          <h2>${esc(p.name)}</h2><p class="sub">${p.tourist_id ? esc(p.tourist_id) + " · " : ""}${p.place ? "📍 " + esc(p.place) : p.location ? `📍 ${p.location.lat.toFixed(4)}, ${p.location.lng.toFixed(4)}` : "no location yet"}</p>
           <dl class="kv"><dt>Safety</dt><dd style="color:${color}">${p.score.score}/100 · ${esc(p.score.label)}</dd>
             <dt>Last seen</dt><dd>${p.location ? ago(p.location.seen_ts) : "—"}</dd>
             <dt>Zone</dt><dd style="color:${RISK[p.zone_risk]}">${p.zones_inside.length ? esc(p.zones_inside.join(", ")) : "no risk zone"}</dd>

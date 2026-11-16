@@ -18,6 +18,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -31,11 +32,33 @@ from travel_buddy.safety.incidents import is_admin
 from travel_buddy.web import auth, pages, portal_api, runtime
 from travel_buddy.safety.ledger import compute_identity_hash, verify_blocks
 from travel_buddy.safety.geofence import RISK_ORDER
-from travel_buddy.safety.risk_intel import HOTSPOT_DAYS, cluster_hotspots
+from travel_buddy.safety.risk_intel import HOTSPOT_DAYS, cached_hotspots
 
 logger = logging.getLogger(__name__)
 
-_token = os.getenv("DASHBOARD_TOKEN") or secrets.token_urlsafe(16)
+def _load_or_create_token() -> str:
+    """DASHBOARD_TOKEN from .env, else a random token generated ONCE and kept in the database,
+    so command-center links keep working across restarts. Delete it from app_settings to rotate."""
+    if os.getenv("DASHBOARD_TOKEN"):
+        return os.environ["DASHBOARD_TOKEN"]
+    try:
+        con = sqlite3.connect(database.DB_PATH, timeout=5)
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            row = con.execute("SELECT value FROM app_settings WHERE key = 'dashboard_token'").fetchone()
+            if row:
+                return row[0]
+            token = secrets.token_urlsafe(16)
+            con.execute("INSERT INTO app_settings (key, value) VALUES ('dashboard_token', ?)", (token,))
+            con.commit()
+            return token
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return secrets.token_urlsafe(16)
+
+
+_token = _load_or_create_token()
 
 
 def dashboard_token() -> str:
@@ -96,7 +119,7 @@ def build_overview() -> dict:
         i["name"], i["tid"] = who["name"], who["tid"]
 
     since = (datetime.now(timezone.utc) - timedelta(days=HOTSPOT_DAYS)).isoformat()
-    hotspots = cluster_hotspots(_q(
+    hotspots = cached_hotspots(_q(
         "SELECT * FROM incidents WHERE lat IS NOT NULL AND created_at >= ? "
         "AND incident_type NOT IN ('no_response', 'geofence_breach')", (since,)))
 
@@ -195,6 +218,10 @@ def command_html(token: str) -> str:
 #  Server
 # ─────────────────────────────────────────────
 
+# Browsers close connections all the time (tab closed, page changed mid-poll): not an error.
+CLIENT_GONE = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "TravelBuddySafety/1.0"
 
@@ -214,7 +241,10 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in headers or []:
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except CLIENT_GONE:
+            logger.debug("Client closed the connection before the response was sent: %s", self.path)
 
     def _redirect(self, location: str, headers: list | None = None) -> None:
         self.send_response(303)
@@ -270,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/auth/logout":
                 auth.delete_session(self._cookie_token())
             return self._api("POST", path, body)
+        except CLIENT_GONE:
+            logger.debug("Client went away during %s", self.path)
         except Exception:
             logger.exception("Web POST failed: %s", self.path)
             return self._send(500, json.dumps({"ok": False, "error": "Server error, please try again."}),
@@ -321,6 +353,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, command_html(_token))
                 return self._send(200, json.dumps(build_overview(), default=str), "application/json")
             return self._send(404, pages.error_html(404, "Page not found", "This page drifted off the map.", "🧭"))
+        except CLIENT_GONE:
+            logger.debug("Client went away during %s", self.path)
         except Exception:
             logger.exception("Web request failed: %s", self.path)
             return self._send(500, pages.error_html(500, "Something went wrong", "Please try again in a moment.", "⚠️"))
@@ -334,6 +368,18 @@ class Handler(BaseHTTPRequestHandler):
         if not ctype:
             return self._send(404, "Not found", "text/plain")
         return self._send(200, (STATIC_DIR / name).read_bytes(), ctype, cache="public, max-age=300")
+
+
+class PortalServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that treats client disconnects as normal and logs real errors properly."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, CLIENT_GONE):
+            logger.debug("Client %s disconnected early", client_address)
+            return
+        logger.exception("Unhandled web server error from %s", client_address)
 
 
 _server: ThreadingHTTPServer | None = None
@@ -351,7 +397,7 @@ def start_web_server(host: str | None = None, port: int | None = None) -> Thread
     last_exc = None
     for p in candidates:
         try:
-            _server = ThreadingHTTPServer((host, p), Handler)
+            _server = PortalServer((host, p), Handler)
             break
         except OSError as exc:
             last_exc = exc

@@ -33,6 +33,11 @@ from dotenv import load_dotenv
 
 load_dotenv(_Path(__file__).resolve().parents[1] / ".env")
 
+# Keep the real database clean: the live run uses its own temporary database unless --real-db.
+if "--real-db" not in sys.argv:
+    import tempfile as _tempfile
+    os.environ["DATABASE_PATH"] = os.path.join(_tempfile.mkdtemp(), "live_check.db")
+
 from telegram import Update
 from telegram.ext import ExtBot
 
@@ -240,6 +245,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--chat-id", type=int, default=None)
     ap.add_argument("--pace", type=float, default=1.2, help="seconds between steps (Telegram rate limits)")
+    ap.add_argument("--real-db", action="store_true", help="use the real travel_bot.db instead of a temporary one")
     a = ap.parse_args()
     cid = a.chat_id or next((int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()), None)
     if not cid:

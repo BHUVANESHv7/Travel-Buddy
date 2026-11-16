@@ -52,7 +52,7 @@ async def test_all():
     print("[OK] Complete trip (/endtrip) and reset to no_active_trip passed")
 
     # 5. Cancel trip (/canceltrip)
-    trip_id2 = await database.create_trip(1001, "Victoria Station", 51.4952, -0.1439, "bus")
+    await database.create_trip(1001, "Victoria Station", 51.4952, -0.1439, "bus")
     user = await database.get_user(1001)
     assert user["current_trip_status"] == "planning"
 

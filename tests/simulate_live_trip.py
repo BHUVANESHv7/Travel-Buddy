@@ -32,10 +32,10 @@ if hasattr(sys.stdout, "reconfigure"):
 from travel_buddy.core.tracker import (
     process_location_ping,
     remove_tracker,
-    haversine_distance_meters,
-    ALERT_ETA_MINUTES_THRESHOLD,
-    ALERT_DISTANCE_KM_THRESHOLD,
-    ARRIVAL_DISTANCE_METERS_THRESHOLD,
+
+
+
+
 )
 from travel_buddy.core import database
 
@@ -155,7 +155,7 @@ async def run_simulation():
     print("-" * 68)
 
     remove_tracker(user_id)
-    trip_id2 = await database.create_trip(
+    await database.create_trip(
         user_id=user_id,
         destination_name=DEST_NAME,
         destination_lat=DEST_LAT,

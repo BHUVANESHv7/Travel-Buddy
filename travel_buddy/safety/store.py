@@ -141,6 +141,13 @@ async def init_safety_db() -> None:
                 ts           REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_lochist_user ON location_history (telegram_id, ts);
+            CREATE INDEX IF NOT EXISTS idx_inc_user ON incidents (telegram_id, incident_id);
+            CREATE INDEX IF NOT EXISTS idx_inc_status ON incidents (status);
+            CREATE INDEX IF NOT EXISTS idx_inc_created ON incidents (created_at);
+            CREATE INDEX IF NOT EXISTS idx_guard_tourist ON guardians (tourist_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_guard_guardian ON guardians (guardian_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_state_seen ON safety_state (last_seen_ts);
+            CREATE INDEX IF NOT EXISTS idx_tid_block ON tourist_ids (block_hash);
         """)
 
         # Phase 6: evidence vault + extra per-user state (migrations are idempotent)
@@ -221,15 +228,35 @@ async def get_safety_state(telegram_id: int) -> dict:
     return row
 
 
+SAFETY_STATE_COLUMNS = {
+    "last_lat", "last_lng", "last_seen_ts", "zone_state", "checkin_pending_ts", "checkin_reason",
+    "inactivity_flagged", "timer_due_ts", "monitoring_enabled", "hotspot_alerts", "weather_alert_key",
+    "weather_checked_ts", "community_alerts",
+}
+
+
 async def update_safety_state(telegram_id: int, **fields) -> None:
-    await get_safety_state(telegram_id)  # ensure row exists
+    """Upsert fields on a user's safety state in ONE connection (hot path: every location update)."""
+    unknown = set(fields) - SAFETY_STATE_COLUMNS
+    if unknown:
+        raise ValueError(f"Unknown safety_state column(s): {', '.join(sorted(unknown))}")
     if "zone_state" in fields and not isinstance(fields["zone_state"], str):
         fields["zone_state"] = json.dumps(fields["zone_state"])
     cols = ", ".join(f"{k} = ?" for k in fields)
-    await _execute(
-        f"UPDATE safety_state SET {cols} WHERE telegram_id = ?",
-        (*fields.values(), telegram_id),
-    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO safety_state (telegram_id) VALUES (?)", (telegram_id,))
+        if fields:
+            await db.execute(f"UPDATE safety_state SET {cols} WHERE telegram_id = ?", (*fields.values(), telegram_id))
+        await db.commit()
+
+
+async def mark_weather_checked(telegram_ids: list[int], ts: float) -> None:
+    if not telegram_ids:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany("UPDATE safety_state SET weather_checked_ts = ? WHERE telegram_id = ?",
+                             [(ts, uid) for uid in telegram_ids])
+        await db.commit()
 
 
 async def get_all_safety_states() -> list[dict]:

@@ -11,6 +11,10 @@ __pycache__/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+backups/
 *.sqlite3
 
 # Logs

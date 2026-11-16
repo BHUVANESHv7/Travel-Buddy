@@ -281,7 +281,7 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `SAFETY_ESCALATE_MIN` | | `15` | Minutes to answer a check-in before responders are alerted |
 | `WEB_ENABLED` | | `1` | Set to `0` to disable the web portal |
 | `WEB_HOST` / `WEB_PORT` | | `127.0.0.1` / `8080` | Web portal bind address (if the port is busy, the next free port is used automatically and shown in the log) |
-| `DASHBOARD_TOKEN` | | random | Secret for the command center (a random one is sent to admins at start-up if unset) |
+| `DASHBOARD_TOKEN` | | random | Secret for the command-center link. If unset, one is generated once, stored in the database (kept across restarts) and sent to admins at start-up |
 | `PUBLIC_BASE_URL` | | `http://localhost:8080` | Public URL used in QR codes (e.g. an ngrok or server URL) |
 | `DATABASE_PATH` | | `./travel_bot.db` | SQLite database location |
 | `AI_DAILY_LIMIT` | | `300` | Max Groq AI calls per day (then offline mode) |

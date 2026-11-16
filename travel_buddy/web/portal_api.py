@@ -132,30 +132,77 @@ def _id_view(rec: dict) -> dict:
                                 "emergency_phone", "valid_from", "valid_until", "block_hash", "status")}
 
 
-async def _family(uid: int) -> list[dict]:
-    from travel_buddy.bot.intel_handlers import build_live_context
-    out = []
-    for t in (await store.get_tourists_guarded_by(uid))[:10]:
-        name, tid, _ = await tourist_label(t)
-        state = await store.get_safety_state(t)
-        ctx = await build_live_context(t)
-        trip = await database.get_active_or_planning_trip(t)
-        zones = await store.get_active_zones()
-        inside = [z for z in zones if z["zone_id"] in state["zone_state"]["inside"]]
-        out.append({
-            "id": t, "name": name, "tourist_id": tid, "place": ctx.get("place"), "score": ctx["_score"],
-            "location": {"lat": state["last_lat"], "lng": state["last_lng"], "seen_ts": state["last_seen_ts"]}
-            if state["last_lat"] is not None else None,
-            "zone_risk": max((z["risk_level"] for z in inside), key=lambda r: RISK_ORDER[r], default="safe"),
-            "zones_inside": [z["name"] for z in inside],
-            "checkin_pending": bool(state["checkin_pending_ts"]),
-            "timer_due_ts": state["timer_due_ts"],
-            "trip": {"destination": trip["destination_name"], "status": trip["status"], "mode": trip["transport_mode"]}
-            if trip else None,
-            "trail": [{"lat": p["lat"], "lng": p["lng"], "ts": p["ts"]} for p in await store.get_location_history(t, 20)],
-            "incidents": [_incident_view(i) for i in await store.get_user_incidents(t, 10)],
-        })
-    return out
+def _family_fast(uid: int) -> list[dict]:
+    """Guardian view built with ONE read-only connection plus already-cached place/weather/hotspots.
+
+    (The full live-context path opens ~15 async connections per person; this keeps the
+    Family tab fast even for guardians of many travellers.)
+    """
+    import sqlite3
+    from travel_buddy.safety import geofence as gf, risk_intel as ri
+    from travel_buddy.safety.monitor import approx_local_hour, compute_safety_score, recent_anomaly_count
+
+    con = sqlite3.connect(database.DB_PATH, timeout=5)
+    con.row_factory = sqlite3.Row
+    q = lambda sql, p=(): [dict(r) for r in con.execute(sql, p).fetchall()]  # noqa: E731
+    try:
+        people = [r["tourist_telegram_id"] for r in q(
+            "SELECT tourist_telegram_id FROM guardians WHERE guardian_telegram_id = ? ORDER BY guardian_row_id", (uid,))][:10]
+        zones = {z["zone_id"]: z for z in q("SELECT * FROM geofence_zones WHERE active = 1")}
+        hotspots = ri._hotspot_cache.get("data") or []
+        out = []
+        for t in people:
+            user = (q("SELECT username FROM users WHERE telegram_id = ?", (t,)) or [{}])[0]
+            rec = (q("SELECT * FROM tourist_ids WHERE telegram_id = ? AND status = 'active' "
+                     "ORDER BY created_at DESC LIMIT 1", (t,)) or [None])[0]
+            st = (q("SELECT * FROM safety_state WHERE telegram_id = ?", (t,)) or [{}])[0]
+            lat, lng = st.get("last_lat"), st.get("last_lng")
+            inside = [zones[z] for z in json.loads(st.get("zone_state") or "{}").get("inside", []) if z in zones]
+            incidents = q("SELECT * FROM incidents WHERE telegram_id = ? ORDER BY incident_id DESC LIMIT 10", (t,))
+            open_n = q("SELECT COUNT(*) AS n FROM incidents WHERE telegram_id = ? AND status != 'resolved'", (t,))[0]["n"]
+            trip = (q("SELECT * FROM trips WHERE user_id = ? AND status IN ('planning', 'active') "
+                      "ORDER BY trip_id DESC LIMIT 1", (t,)) or [None])[0]
+            trail = q("SELECT lat, lng, ts FROM location_history WHERE telegram_id = ? ORDER BY ts DESC LIMIT 20", (t,))
+            place = weather = hot_risk = None
+            if lat is not None:
+                geo = gf._reverse_cache.get((round(lat, 3), round(lng, 3)))
+                if geo:
+                    place = ", ".join(p.strip() for p in geo["display_name"].split(",")[:3])
+                else:  # warm the cache in the background for the next refresh
+                    try:
+                        runtime.run_background(gf.reverse_geocode(lat, lng))
+                    except Exception:
+                        pass
+                hit = ri._weather_cache.get((round(lat, 2), round(lng, 2)))
+                weather = hit[1] if hit and time.time() - hit[0] < ri.WEATHER_CACHE_S else None
+                near = ri.hotspots_near(lat, lng, hotspots, within_m=1000)
+                hot_risk = near[0][0]["risk_level"] if near else None
+            score = compute_safety_score(
+                zone_risk=max((z["risk_level"] for z in inside), key=lambda r: RISK_ORDER[r], default="safe"),
+                local_hour=approx_local_hour(lng) if lng is not None else None,
+                open_incidents=open_n, recent_anomalies=recent_anomaly_count(t),
+                checkin_pending=bool(st.get("checkin_pending_ts")), has_digital_id=rec is not None,
+                has_guardian=True, location_known=bool(st.get("last_seen_ts")) and time.time() - st["last_seen_ts"] < 3600,
+                weather_risk=(weather or {}).get("worst", "none"), hotspot_risk=hot_risk,
+            )
+            out.append({
+                "id": t, "name": rec["full_name"] if rec else (user.get("username") or f"User {t}"),
+                "tourist_id": rec["tourist_id"] if rec else None, "place": place, "score": score,
+                "location": {"lat": lat, "lng": lng, "seen_ts": st.get("last_seen_ts")} if lat is not None else None,
+                "zone_risk": max((z["risk_level"] for z in inside), key=lambda r: RISK_ORDER[r], default="safe"),
+                "zones_inside": [z["name"] for z in inside],
+                "checkin_pending": bool(st.get("checkin_pending_ts")),
+                "timer_due_ts": st.get("timer_due_ts"),
+                "trip": {"destination": trip["destination_name"], "status": trip["status"], "mode": trip["transport_mode"]}
+                if trip else None,
+                "trail": [{"lat": p["lat"], "lng": p["lng"], "ts": p["ts"]} for p in trail],
+                "incidents": [_incident_view(i) for i in incidents],
+            })
+        return out
+    finally:
+        con.close()
+
+
 
 
 # ═════════════════════════════════════════════
@@ -573,7 +620,7 @@ def _route(method, path, body, session, desk_token_ok, client) -> Response:
         if path == "/api/me/overview":
             return ok(**runtime.run(_overview(uid)))
         if path == "/api/family":
-            return ok(people=runtime.run(_family(uid)))
+            return ok(people=_family_fast(uid))
         if path == "/api/me/nearby":
             return ok(**runtime.run(_nearby(uid)))
         if path == "/api/me/phrases":

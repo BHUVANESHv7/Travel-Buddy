@@ -53,3 +53,11 @@ def run(coro, timeout: float = 60.0):
     if _loop is not None and _loop.is_running():
         return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout)
     return asyncio.run(coro)
+
+
+def run_background(coro) -> None:
+    """Fire-and-forget a coroutine on the bot loop (e.g. warm a cache). No-op without a running loop."""
+    if _loop is not None and _loop.is_running():
+        asyncio.run_coroutine_threadsafe(coro, _loop)
+    else:
+        coro.close()

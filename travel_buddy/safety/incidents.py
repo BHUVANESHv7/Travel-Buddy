@@ -27,7 +27,7 @@ from travel_buddy.safety.geofence import maps_link
 from travel_buddy.safety.risk_intel import get_weather_risk, invalidate_hotspots
 from travel_buddy.safety.store import (
     create_incident, get_all_safety_states, get_incident, get_linked_guardian_ids,
-    get_users_seen_near, set_incident_block_hash, update_safety_state,
+    get_users_seen_near, mark_weather_checked, set_incident_block_hash, update_safety_state,
 )
 from travel_buddy.core.tracker import haversine_distance_meters
 
@@ -228,24 +228,38 @@ WEATHER_ACTIVE_S = 2 * 3600
 weather_provider = get_weather_risk  # swappable in tests
 
 
-async def check_weather_for(bot: Bot, s: dict, now: float) -> None:
-    if not s["last_seen_ts"] or now - s["last_seen_ts"] > WEATHER_ACTIVE_S:
+def _needs_weather_check(s: dict, now: float) -> bool:
+    return bool(s["last_seen_ts"]) and now - s["last_seen_ts"] <= WEATHER_ACTIVE_S and not (
+        s.get("weather_checked_ts") and now - s["weather_checked_ts"] < WEATHER_CHECK_S)
+
+
+async def check_weather_batch(bot: Bot, states: list[dict], now: float) -> None:
+    """Weather watch for all recently-active users: one batched write, one lookup per ~1 km area."""
+    due = [s for s in states if _needs_weather_check(s, now)]
+    if not due:
         return
-    if s.get("weather_checked_ts") and now - s["weather_checked_ts"] < WEATHER_CHECK_S:
-        return
-    await update_safety_state(s["telegram_id"], weather_checked_ts=now)
-    w = await weather_provider(s["last_lat"], s["last_lng"])
-    if not w or w["worst"] != "high":
-        return
-    key = time.strftime("%Y-%m-%d", time.gmtime(now)) + ":" + ",".join(sorted(h["key"] for h in w["hazards"]))
-    if key == s.get("weather_alert_key"):
-        return
-    await update_safety_state(s["telegram_id"], weather_alert_key=key)
-    await _safe_send(
-        bot, s["telegram_id"],
-        "🌩️ <b>Severe weather alert near you</b>\n\n" + "\n".join(f"• {h['text']}" for h in w["hazards"])
-        + f"\n\n<i>Now: {w['summary']}. Check routes with /saferoute before heading out.</i>",
-    )
+    await mark_weather_checked([s["telegram_id"] for s in due], now)
+    by_area: dict[tuple, dict | None] = {}
+    for s in due:
+        area = (round(s["last_lat"], 2), round(s["last_lng"], 2))
+        if area not in by_area:
+            try:
+                by_area[area] = await weather_provider(s["last_lat"], s["last_lng"])
+            except Exception:
+                logger.exception("Weather lookup failed for %s", area)
+                by_area[area] = None
+        w = by_area[area]
+        if not w or w["worst"] != "high":
+            continue
+        key = time.strftime("%Y-%m-%d", time.gmtime(now)) + ":" + ",".join(sorted(h["key"] for h in w["hazards"]))
+        if key == s.get("weather_alert_key"):
+            continue
+        await update_safety_state(s["telegram_id"], weather_alert_key=key)
+        await _safe_send(
+            bot, s["telegram_id"],
+            "🌩️ <b>Severe weather alert near you</b>\n\n" + "\n".join(f"• {h['text']}" for h in w["hazards"])
+            + f"\n\n<i>Now: {w['summary']}. Check routes with /saferoute before heading out.</i>",
+        )
 
 
 async def forward_media(bot: Bot, tourist_user_id: int, kind: str, file_id: str, caption: str) -> int:
@@ -279,13 +293,14 @@ async def send_checkin(bot: Bot, user_id: int, reason: str, detail: str = "") ->
 
 async def run_monitor_cycle(bot: Bot, now: float | None = None) -> None:
     now = now or time.time()
-    for s in await get_all_safety_states():
+    states = await get_all_safety_states()
+    try:
+        await check_weather_batch(bot, states, now)
+    except Exception:
+        logger.exception("Weather watch failed")
+    for s in states:
         uid = s["telegram_id"]
         try:
-            try:
-                await check_weather_for(bot, s, now)
-            except Exception:
-                logger.exception("Weather watch failed for user %s", uid)
             if s["checkin_pending_ts"]:
                 if now - s["checkin_pending_ts"] >= ESCALATE_S:
                     reason = s["checkin_reason"] or "unknown"

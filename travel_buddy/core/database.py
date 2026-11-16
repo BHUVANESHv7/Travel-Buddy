@@ -26,6 +26,8 @@ async def init_db() -> None:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
+        # WAL lets the web portal read while the bot writes (no "database is locked" stalls).
+        await db.execute("PRAGMA journal_mode = WAL;")
 
         # Users table
         await db.execute("""
@@ -54,6 +56,8 @@ async def init_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES users (telegram_id) ON DELETE CASCADE
             )
         """)
+
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_trips_user ON trips (user_id, status)")
 
         # User preferences table (Phase 4)
         await db.execute("""
