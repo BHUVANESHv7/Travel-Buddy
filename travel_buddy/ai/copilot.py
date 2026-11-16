@@ -83,10 +83,10 @@ def build_context_text(ctx: dict) -> str:
     return "TRAVELLER LIVE CONTEXT:\n" + "\n".join(lines)
 
 
-async def answer_copilot(question: str, ctx: dict) -> str:
+async def answer_copilot(question: str, ctx: dict, channel: str = "telegram") -> str:
     key = _groq_key()
     if not key:
-        return _offline_answer(ctx)
+        return _offline_answer(ctx, channel)
     try:
         client = AsyncGroq(api_key=key)
         resp = await client.chat.completions.create(
@@ -101,16 +101,17 @@ async def answer_copilot(question: str, ctx: dict) -> str:
         return (resp.choices[0].message.content or "").strip()
     except Exception as exc:  # e.g. free-tier rate limit (429) or network → still give a useful answer
         logger.warning("Copilot AI unavailable, answering offline: %s", exc)
-        return _offline_answer(ctx)
+        return _offline_answer(ctx, channel)
 
 
-def _offline_answer(ctx: dict) -> str:
+def _offline_answer(ctx: dict, channel: str = "telegram") -> str:
     """Useful answer built from the live context, with no AI call (always free)."""
     parts = ["🤖 <b>Copilot (offline mode)</b> — here's your live safety picture:"]
     for label in ("place", "safety_score", "zone", "weather", "weather_hazards", "nearby_hotspots", "trip"):
         if ctx.get(label):
             parts.append(f"• <b>{label.replace('_', ' ').title()}:</b> {ctx[label]}")
-    parts.append("\nTry /saferoute &lt;place&gt;, /nearby or /weather. In danger → /sos.")
+    parts.append("\nTry the Trip tab's safe-route check or Nearby help. In danger → hold the SOS button."
+                 if channel == "web" else "\nTry /saferoute &lt;place&gt;, /nearby or /weather. In danger → /sos.")
     return "\n".join(parts)
 
 

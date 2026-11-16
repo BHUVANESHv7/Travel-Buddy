@@ -353,13 +353,13 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 
 ## 🖥️ Web portal
 
-Every role can use the website as well as Telegram, and both share **one implementation** (`travel_buddy/safety/actions.py`), so they always behave the same.
+Every role can use the website as well as Telegram, with the same features on both (voice notes aside, since the web has a hold-to-send SOS button). Both channels share **one implementation** (`travel_buddy/safety/actions.py`), so they always behave the same.
 
 | Who | Where | What they can do on the web |
 |---|---|---|
-| 🧳 **Tourist** | `/login` → `/app` | Live safety score & map, share location / live journey tracking, **hold-to-send SOS**, "I'm safe", report incidents (AI triage), E-FIR download, Digital ID (register, QR, verify, revoke), guardians (invite, remove), trips with stop alerts, safe-route check, nearby help, safety timer, settings |
+| 🧳 **Tourist** | `/login` → `/app` | Live safety score & map, share location / live journey tracking, **hold-to-send SOS**, "I'm safe", report incidents (AI triage), **photo evidence upload**, E-FIR download, Digital ID (register, QR, verify, revoke), guardians (invite, remove), trips with stop alerts, safe-route check, nearby help, safety timer, settings, and an **Assistant** tab (AI copilot chat, safety briefing, emergency phrasebook + AI translation, personalised travel guide) |
 | 👨‍👩‍👧 **Guardian / parent** | `/login` → `/app` → **Family** | Live status, location trail and safety score of each person they protect; missed check-in and SOS banners; **acknowledge / resolve** incidents (the tourist is told on Telegram); E-FIR |
-| 👮 **Officer (safety desk)** | `/login` (admin account) → `/command` | Live command-center map, incident queue with **Acknowledge / Resolve** buttons, hotspots, ledger health |
+| 👮 **Officer (safety desk)** | `/login` (admin account) → `/command` | Live command-center map, incident queue with **Acknowledge / Resolve** buttons, hotspots, ledger health, and a **Desk** tab to add/remove geo-fence zones (click the map to place them) and watch free-tier usage |
 
 **Sign-in uses the Telegram account, with no passwords.** Either:
 1. On `/login`, enter your Telegram @username, Telegram ID or Tourist ID; the bot sends a 6-digit code to your Telegram (valid 10 min, 5 attempts), **or**

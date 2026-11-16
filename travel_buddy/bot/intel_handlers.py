@@ -28,7 +28,7 @@ from travel_buddy.ai.copilot import (
     COUNTRY_LANGUAGE, PHRASEBOOK, answer_copilot, detect_distress, phrasebook_text,
     transcribe_voice, translate_phrase,
 )
-from travel_buddy.ai.triage import classify_incident, keyword_triage
+from travel_buddy.ai.triage import keyword_triage
 from travel_buddy.safety.ledger import append_block, get_active_tourist_id
 from travel_buddy.core.database import get_active_or_planning_trip, upsert_user
 from travel_buddy.core.geocoding import geocode_location
@@ -255,20 +255,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     photo = update.message.photo[-1]
     caption = (update.message.caption or "").strip()
 
-    # Attach to the most recent open incident from the last 24 h, else open one from the caption.
-    target = None
-    for inc in await get_open_user_incidents(user.id):
-        try:
-            from datetime import datetime, timezone
-            age = time.time() - datetime.fromisoformat(inc["created_at"]).replace(
-                tzinfo=timezone.utc).timestamp()
-        except Exception:
-            age = 0
-        if age <= EVIDENCE_WINDOW_S and inc["incident_type"] not in ("no_response",):
-            target = inc
-            break
-
-    if target is None and not caption:
+    from travel_buddy.safety.actions import add_photo_evidence, evidence_target
+    if await evidence_target(user.id) is None and len(caption) < 3:
         await update.message.reply_html(
             "📸 To log this photo as evidence, resend it with a <b>caption</b> describing what happened "
             "(e.g. <i>“this taxi driver took my bag”</i>), or start with /report."
@@ -277,26 +265,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     status = await update.message.reply_html("🔐 <i>Sealing photo evidence on the ledger…</i>")
     data = await _download(context, photo.file_id)
-    lat, lng, _ = await sh._last_known_location(user.id)
-
-    created = False
-    if target is None:
-        triage = await classify_incident(caption)
-        target = await raise_incident(
-            context.bot, user.id, triage["category"], triage["severity"], caption,
-            lat, lng, source="photo", ai_advice=triage["advice"],
-        )
-        created = True
-
-    digest, block = await _seal_evidence(user.id, target["incident_id"], "photo", photo.file_id, data, caption or None)
-    forwarded = 0
-    if target["severity"] != "low" or target["incident_type"] == "sos":
-        forwarded = await forward_media(
-            context.bot, user.id, "photo", photo.file_id,
-            f"📸 Evidence for incident #{target['incident_id']} "
-            f"({TYPE_LABEL.get(target['incident_type'], target['incident_type'])})"
-            + (f"\n“{escape(caption[:300])}”" if caption else ""),
-        )
+    res = await add_photo_evidence(context.bot, user.id, data, caption, file_id=photo.file_id)
+    target, created, digest, forwarded = res["incident"], res["created"], res["sha256"], res["forwarded"]
+    block = {"block_index": res["block_index"]}
     await status.edit_text(
         ("🆕 New incident " if created else "📎 Attached to incident ")
         + f"<b>#{target['incident_id']}</b> {SEVERITY_EMOJI[target['severity']]} "

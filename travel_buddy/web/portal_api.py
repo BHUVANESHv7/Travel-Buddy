@@ -15,7 +15,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from html import escape
+from html import escape, unescape
 
 from travel_buddy.core import database
 from travel_buddy.core.geocoding import geocode_location
@@ -320,6 +320,160 @@ async def _incident_action(inc_id: int, action: str, uid: int | None, desk: bool
 
 
 # ═════════════════════════════════════════════
+#  Assistant: copilot, safety briefing, phrasebook, travel guide
+# ═════════════════════════════════════════════
+
+ALLOWED_TAGS = ("b", "i", "u", "s", "code")
+
+
+def safe_html(text: str) -> str:
+    """AI output → safe HTML: escape everything, then re-allow a few formatting tags only."""
+    out = escape(unescape(text or ""))  # decode entities first so they aren't shown double-escaped
+    for tag in ALLOWED_TAGS:
+        out = out.replace(f"&lt;{tag}&gt;", f"<{tag}>").replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+    return out
+
+
+async def _ask(uid: int, question: str) -> dict:
+    from travel_buddy.ai.copilot import answer_copilot, detect_distress
+    from travel_buddy.ai.triage import keyword_triage
+    from travel_buddy.bot.intel_handlers import build_live_context
+    question = question.strip()[:800]
+    if not question:
+        raise ApiError(400, "Type a question.")
+    if detect_distress(question) or keyword_triage(question)["severity"] == "critical":
+        return {"distress": True, "html": "🚨 <b>This sounds like an emergency.</b> Hold the SOS button to alert your "
+                                          "guardians and the safety desk with your location — or call <b>112</b> now."}
+    ctx = {k: v for k, v in (await build_live_context(uid)).items() if not k.startswith("_")}
+    return {"distress": False, "html": safe_html(await answer_copilot(question, ctx, channel="web"))}
+
+
+async def _default_place(uid: int) -> str | None:
+    trip = await database.get_active_or_planning_trip(uid)
+    if trip:
+        return trip["destination_name"]
+    state = await store.get_safety_state(uid)
+    if state["last_lat"] is not None:
+        geo = await reverse_geocode(state["last_lat"], state["last_lng"])
+        if geo:
+            parts = [p.strip() for p in geo["display_name"].split(",")]
+            return ", ".join(parts[1:3]) if len(parts) > 2 else geo["display_name"]
+    return None
+
+
+async def _safetytips(uid: int, place: str) -> dict:
+    from travel_buddy.ai.triage import generate_safety_briefing
+    place = place.strip()[:80] or (await _default_place(uid) or "")
+    if not place:
+        raise ApiError(400, "Enter a place, or share your location / start a trip first.")
+    return {"place": place, "html": safe_html(await generate_safety_briefing(place))}
+
+
+async def _phrases(uid: int) -> dict:
+    from travel_buddy.ai.copilot import COUNTRY_LANGUAGE, PHRASE_KEYS, PHRASEBOOK
+    auto = "hindi"
+    state = await store.get_safety_state(uid)
+    if state["last_lat"] is not None:
+        geo = await reverse_geocode(state["last_lat"], state["last_lng"])
+        auto = COUNTRY_LANGUAGE.get((geo or {}).get("country_code") or "", "hindi")
+    return {"auto": auto, "keys": PHRASE_KEYS, "phrases": PHRASEBOOK}
+
+
+async def _translate(body: dict) -> dict:
+    from travel_buddy.ai.copilot import translate_phrase
+    lang = str(body.get("language") or "").strip()[:30]
+    text = str(body.get("text") or "").strip()[:200]
+    if not lang or not text:
+        raise ApiError(400, "Enter a language and a phrase.")
+    return {"language": lang, "text": text, "result": re.sub(r"<[^>]+>", "", await translate_phrase(text, lang))}
+
+
+PREF_BUDGETS = ("low", "medium", "high")
+PREF_PACES = ("relaxed", "packed")
+
+
+async def _save_preferences(uid: int, body: dict) -> dict:
+    interests = str(body.get("interests") or "").strip()[:120]
+    budget = body.get("budget_level") if body.get("budget_level") in PREF_BUDGETS else None
+    pace = body.get("pace") if body.get("pace") in PREF_PACES else None
+    if not interests or not budget or not pace:
+        raise ApiError(400, "Choose your interests, budget and pace.")
+    await database.save_user_preferences(uid, interests, budget, pace)
+    return {"preferences": await database.get_user_preferences(uid)}
+
+
+async def _explore(uid: int, query: str) -> dict:
+    from travel_buddy.ai.travel_guide import generate_travel_guide
+    query = query.strip()[:300]
+    if not query:
+        raise ApiError(400, "Ask something, e.g. “best local food nearby”.")
+    prefs = await database.get_user_preferences(uid)
+    if not prefs:
+        raise ApiError(409, "Set your travel preferences first.")
+    trip = await database.get_active_or_planning_trip(uid)
+    dest = trip["destination_name"] if trip else None
+    return {"context": dest, "html": safe_html(await generate_travel_guide(query, dest, prefs))}
+
+
+# ═════════════════════════════════════════════
+#  Photo evidence
+# ═════════════════════════════════════════════
+
+MAX_EVIDENCE_BYTES = 6 * 1024 * 1024
+IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"RIFF")
+
+
+async def _evidence(uid: int, body: dict) -> dict:
+    import base64
+    raw = str(body.get("image_b64") or "")
+    if "," in raw[:100]:
+        raw = raw.split(",", 1)[1]  # strip a data: URL prefix
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except ValueError:
+        raise ApiError(400, "That image couldn't be read.")
+    if not data or len(data) > MAX_EVIDENCE_BYTES or not data.startswith(IMAGE_MAGIC):
+        raise ApiError(400, "Please upload a JPEG, PNG or WebP photo under 6 MB.")
+    incident = None
+    if body.get("incident_id"):
+        incident = await store.get_incident(int(_num(body["incident_id"], "incident", 1, 10**9)))
+        if not incident or incident["telegram_id"] != uid:
+            raise ApiError(404, "Incident not found.")
+    try:
+        res = await actions.add_photo_evidence(runtime.bot(), uid, data, str(body.get("caption") or ""), incident=incident)
+    except ValueError as exc:
+        raise ApiError(400, str(exc))
+    return {"incident": _incident_view(await store.get_incident(res["incident"]["incident_id"])),
+            "created": res["created"], "sha256": res["sha256"], "block_index": res["block_index"],
+            "forwarded": res["forwarded"]}
+
+
+# ═════════════════════════════════════════════
+#  Safety desk (officers)
+# ═════════════════════════════════════════════
+
+ZONE_RISKS = ("safe", "caution", "high", "restricted")
+
+
+def _zone_view(z: dict) -> dict:
+    return {"id": z["zone_id"], "name": z["name"], "risk": z["risk_level"], "lat": z["center_lat"],
+            "lng": z["center_lng"], "radius_m": z["radius_m"], "advisory": z["advisory"] or "",
+            "created_at": z["created_at"]}
+
+
+async def _add_zone(body: dict, by_uid: int | None) -> dict:
+    risk = body.get("risk") if body.get("risk") in ZONE_RISKS else None
+    name = str(body.get("name") or "").strip()[:80]
+    if not risk or len(name) < 2:
+        raise ApiError(400, "Give the zone a name and a risk level.")
+    lat = _num(body.get("lat"), "latitude", -90, 90)
+    lng = _num(body.get("lng"), "longitude", -180, 180)
+    radius = _num(body.get("radius_m"), "radius", 50, 200000)
+    zid = await store.add_zone(name, lat, lng, radius, risk, str(body.get("advisory") or "").strip()[:300], by_uid)
+    return {"zone": _zone_view(next(z for z in await store.get_active_zones() if z["zone_id"] == zid))}
+
+
+# ═════════════════════════════════════════════
 #  Router
 # ═════════════════════════════════════════════
 
@@ -375,6 +529,26 @@ def _route(method, path, body, session, desk_token_ok, client) -> Response:
             raise ApiError(401, "Please sign in.")
         return ok(**data)
 
+    # ── Safety desk: zone management & free-tier usage (admin sign-in or desk token) ──
+    if path.startswith("/api/desk/"):
+        if not (desk_token_ok or (session and is_admin(session["uid"]))):
+            raise ApiError(403, "Safety desk only.")
+        if method == "POST" and not desk_token_ok and body.get("_csrf_ok") is not True:
+            raise ApiError(403, "Security check failed. Reload the page and try again.")
+        by_uid = session["uid"] if session else next(iter(admin_ids()), None)
+        if path == "/api/desk/zones" and method == "GET":
+            return ok(zones=[_zone_view(z) for z in runtime.run(store.get_active_zones())])
+        if path == "/api/desk/zones" and method == "POST":
+            return ok(**runtime.run(_add_zone(body, by_uid)))
+        m = re.fullmatch(r"/api/desk/zones/(\d+)/remove", path)
+        if m and method == "POST":
+            runtime.run(store.deactivate_zone(int(m.group(1))))
+            return ok()
+        if path == "/api/desk/usage" and method == "GET":
+            from travel_buddy.core.usage import usage_report
+            return ok(usage=[{"service": s, "used": u, "limit": lim} for s, u, lim in usage_report()])
+        raise ApiError(404, "Not found.")
+
     # ── Everything below needs a signed-in user ──
     if not session:
         raise ApiError(401, "Please sign in.")
@@ -402,6 +576,10 @@ def _route(method, path, body, session, desk_token_ok, client) -> Response:
             return ok(people=runtime.run(_family(uid)))
         if path == "/api/me/nearby":
             return ok(**runtime.run(_nearby(uid)))
+        if path == "/api/me/phrases":
+            return ok(**runtime.run(_phrases(uid)))
+        if path == "/api/me/preferences":
+            return ok(preferences=runtime.run(database.get_user_preferences(uid)))
         if path == "/api/me/id/qr.png":
             from travel_buddy.bot.intel_handlers import make_qr_png, verification_url
             rec = runtime.run(get_active_tourist_id(uid))
@@ -479,6 +657,18 @@ def _route(method, path, body, session, desk_token_ok, client) -> Response:
         return ok()
     if path == "/api/me/saferoute":
         return ok(**runtime.run(_saferoute(uid, body)))
+    if path == "/api/me/ask":
+        return ok(**runtime.run(_ask(uid, str(body.get("question") or "")), timeout=90))
+    if path == "/api/me/safetytips":
+        return ok(**runtime.run(_safetytips(uid, str(body.get("place") or "")), timeout=90))
+    if path == "/api/me/phrases/translate":
+        return ok(**runtime.run(_translate(body)))
+    if path == "/api/me/preferences":
+        return ok(**runtime.run(_save_preferences(uid, body)))
+    if path == "/api/me/explore":
+        return ok(**runtime.run(_explore(uid, str(body.get("query") or "")), timeout=90))
+    if path == "/api/me/evidence":
+        return ok(**runtime.run(_evidence(uid, body)))
     raise ApiError(404, "Not found.")
 
 

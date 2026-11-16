@@ -162,6 +162,7 @@
   const tabs = [...document.querySelectorAll(".tab")];
   const ind = $(".tab-ind");
   function setTab(name) {
+    if (name !== state.tab) state.deskRendered = false;
     state.tab = name;
     tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
     const a = tabs.find(t => t.dataset.tab === name);
@@ -187,9 +188,68 @@
   const match = (...fields) => !state.q || fields.join(" ").toLowerCase().includes(state.q);
   const empty = (e, t) => `<div class="empty"><span class="e">${e}</span>${t}</div>`;
 
+  // ---------- safety desk: zones + free-tier usage ----------
+  const desk = async (method, url, data) => {
+    const r = await fetch(url, { method, headers: { "Content-Type": "application/json", "X-Requested-With": "TravelBuddy", "X-TB-Token": TOKEN },
+                                 body: method === "GET" ? undefined : JSON.stringify(data || {}) });
+    const body = await r.json().catch(() => ({ ok: false, error: "Unexpected response" }));
+    if (!body.ok) throw new Error(body.error || "Failed");
+    return body;
+  };
+  const USAGE = { ai: "🤖 AI (Groq)", weather: "🌦️ Weather", routing: "🧭 Routing", places: "🏥 Places" };
+  let preview = null;
+  async function renderDesk() {
+    state.deskRendered = true;
+    const list = $("#list");
+    list.innerHTML = '<div class="skel"></div><div class="skel"></div>';
+    try {
+      const [u, z] = await Promise.all([desk("GET", "/api/desk/usage"), desk("GET", "/api/desk/zones")]);
+      if (state.tab !== "desk") return;
+      list.innerHTML = `<div class="desk">
+        <h4>💸 Free-tier usage today</h4>${u.usage.map(x => `<div class="usage-row">${USAGE[x.service] || x.service} <span class="muted">· ${x.used}/${x.limit}</span>
+          <div class="bar"><i style="width:${Math.min(100, x.used * 100 / x.limit)}%"></i></div></div>`).join("")}
+        <h4>➕ Add a geo-fence zone</h4>
+        <form class="zone-form" id="zone-form">
+          <input name="name" placeholder="Zone name, e.g. Army Cantonment" maxlength="80" required>
+          <div class="r2"><select name="risk"><option value="caution">🟡 caution</option><option value="high">🟠 high</option>
+            <option value="restricted">🔴 restricted</option><option value="safe">🟢 safe</option></select>
+            <input name="radius_m" type="number" min="50" max="200000" value="1000" title="radius in metres" required></div>
+          <div class="r2"><input name="lat" placeholder="latitude" required><input name="lng" placeholder="longitude" required></div>
+          <span class="hint-pick">👆 Click the map to set the centre</span>
+          <input name="advisory" placeholder="Advice shown to tourists" maxlength="300">
+          <button type="submit">Add zone</button></form>
+        <h4>🗺️ Active zones (${z.zones.length})</h4>
+        ${z.zones.map(zz => `<div class="item" data-zone="${zz.lat},${zz.lng}" style="--ic:${RISK[zz.risk]}">
+          <div class="item-top"><b>${esc(zz.name)}</b><span class="r" style="color:${RISK[zz.risk]}">${zz.risk}</span></div>
+          <div class="item-sub">${(zz.radius_m / 1000).toFixed(1)} km radius${zz.advisory ? " · " + esc(zz.advisory.slice(0, 80)) : ""}</div>
+          <div class="item-acts"><button class="act" data-zone-remove="${zz.id}">🗑️ Remove</button></div></div>`).join("") || empty("🗺️", "No zones yet.")}
+      </div>`;
+      $("#zone-form").addEventListener("submit", async e => {
+        e.preventDefault();
+        const f = e.target, btn = f.querySelector("button");
+        btn.disabled = true;
+        try {
+          const data = Object.fromEntries(new FormData(f));
+          const r = await desk("POST", "/api/desk/zones", data);
+          notify(`🗺️ Zone “${esc(r.zone.name)}” added. Tourists will be alerted on approach and entry.`, "#2ee59d");
+          if (preview) { map.removeLayer(preview); preview = null; }
+          state.zoneSig = ""; await refresh(); renderDesk();
+        } catch (err) { notify("⚠️ " + esc(err.message), "#ff4d6d"); btn.disabled = false; }
+      });
+    } catch (err) { list.innerHTML = empty("⚠️", esc(err.message)); }
+  }
+  map.on("click", e => {
+    if (state.tab !== "desk") return;
+    const f = $("#zone-form"); if (!f) return;
+    f.lat.value = e.latlng.lat.toFixed(5); f.lng.value = e.latlng.lng.toFixed(5);
+    if (preview) map.removeLayer(preview);
+    preview = L.circle(e.latlng, { radius: +f.radius_m.value || 1000, color: RISK[f.risk.value], dashArray: "4 4", fillOpacity: .15 }).addTo(map);
+  });
+
   function renderList() {
     const d = state.data; if (!d) return;
     const list = $("#list");
+    if (state.tab === "desk") { if (!state.deskRendered) renderDesk(); return; }  // form: don't redraw on refresh
     const open = d.incidents.filter(i => i.status !== "resolved");
     let html = "";
     if (state.tab === "incidents") {
@@ -234,6 +294,18 @@
     d.incidents.forEach(i => delete i._fresh);
   }
   $("#list").addEventListener("click", async e => {
+    const rm = e.target.closest("button[data-zone-remove]");
+    if (rm) {
+      e.stopPropagation();
+      if (!confirm("Remove this zone? Tourists will no longer be alerted about it.")) return;
+      try {
+        await desk("POST", `/api/desk/zones/${rm.dataset.zoneRemove}/remove`);
+        notify("🗑️ Zone removed.", "#2ee59d"); state.zoneSig = ""; await refresh(); renderDesk();
+      } catch (err) { notify("⚠️ " + esc(err.message), "#ff4d6d"); }
+      return;
+    }
+    const zone = e.target.closest(".item[data-zone]");
+    if (zone) { const [a, b] = zone.dataset.zone.split(","); map.flyTo([+a, +b], 12, { duration: 1.1 }); return; }
     const act = e.target.closest("button[data-act]");
     if (act) {  // officer action: acknowledge / resolve (notifies the tourist on Telegram)
       e.stopPropagation();

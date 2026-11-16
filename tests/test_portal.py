@@ -59,6 +59,12 @@ class FakeBot:
     async def send_location(self, *a, **kw):
         pass
 
+    async def send_photo(self, chat_id, photo, caption=None, **kw):
+        """Behaves like Telegram: returns a message whose largest photo has a file_id."""
+        from types import SimpleNamespace
+        self.sent.append((chat_id, f"[photo] {caption or ''}"))
+        return SimpleNamespace(photo=[SimpleNamespace(file_id="small"), SimpleNamespace(file_id=f"tg-photo-{len(self.sent)}")])
+
 
 # ── no external network in tests ──
 async def fake_reverse(lat, lng):
@@ -309,6 +315,83 @@ def run_tests(base):
     s, _ = anon.json("POST", f"/api/incident/{scam_id}/ack", headers={"X-TB-Token": "wrong"})
     assert s == 401
     ok("Officer signs in to the command center; desk token resolves incidents; bad token refused")
+
+    # ── Assistant: copilot, safety briefing, phrasebook, travel guide ──
+    s, body = t.json("POST", "/api/me/ask", {"question": "is it safe to walk to the fort now?"})
+    assert s == 200 and not body["distress"] and "offline mode" in body["html"]
+    s, body = t.json("POST", "/api/me/ask", {"question": "help me please someone is following me"})
+    assert body["distress"] and "SOS" in body["html"]
+    from travel_buddy.ai import copilot as _cop
+
+    async def evil_answer(q, ctx, channel="web"):
+        return "<script>alert(1)</script><b>bold</b> <a href='javascript:x'>link</a>"
+    real_answer, _cop.answer_copilot = _cop.answer_copilot, evil_answer
+    s, body = t.json("POST", "/api/me/ask", {"question": "hello"})
+    _cop.answer_copilot = real_answer
+    assert "<script>" not in body["html"] and "&lt;script&gt;" in body["html"] and "<b>bold</b>" in body["html"] \
+        and "<a " not in body["html"]
+    ok("Copilot chat answers, flags distress, and AI output is sanitised (no script/link injection)")
+
+    from travel_buddy.ai import triage as _tri
+
+    async def fake_brief(place, extra=""):
+        return f"<b>🛡️ Overall</b> {place} is generally safe."
+    _tri.generate_safety_briefing = fake_brief
+    s, body = t.json("POST", "/api/me/safetytips", {"place": ""})
+    assert s == 200 and body["place"] and "<b>" in body["html"]
+    s, body = t.json("GET", "/api/me/phrases")
+    assert body["auto"] == "hindi" and "मदद करो" in body["phrases"]["hindi"][0] and len(body["keys"]) == 5
+    s, body = t.json("POST", "/api/me/phrases/translate", {"language": "Assamese", "text": "Help"})
+    assert s == 200 and "GROQ_API_KEY" in body["result"]
+    ok("Safety briefing (defaults to your area), phrasebook auto-language (Hindi in India), AI translate fallback")
+
+    s, body = t.json("GET", "/api/me/preferences")
+    assert body["preferences"] is None
+    s, body = t.json("POST", "/api/me/explore", {"query": "street food"})
+    assert s == 409
+    s, body = t.json("POST", "/api/me/preferences", {"interests": "food, history", "budget_level": "low", "pace": "relaxed"})
+    assert s == 200 and body["preferences"]["budget_level"] == "low"
+    s, body = t.json("POST", "/api/me/preferences", {"interests": "x", "budget_level": "cheap", "pace": "relaxed"})
+    assert s == 400
+    s, body = t.json("POST", "/api/me/explore", {"query": "street food"})
+    assert s == 200 and "Groq API Key Not Configured" in body["html"]
+    ok("Travel guide needs preferences first; preferences validated and saved; guide answers")
+
+    # ── photo evidence upload ──
+    import base64
+    from travel_buddy.bot.intel_handlers import make_qr_png
+    png = make_qr_png("evidence-test")
+    s, body = t.json("POST", "/api/me/evidence", {"image_b64": "data:image/png;base64," + base64.b64encode(png).decode(),
+                                                  "caption": "Taxi that took my bag"})
+    assert s == 200 and body["sha256"] and body["incident"]["id"], body
+    ev_rows = runtime.run(store.get_evidence(body["incident"]["id"]))
+    assert ev_rows and ev_rows[-1]["file_id"].startswith("tg-photo-"), "web photo should be stored via Telegram"
+    assert any(c == TOURIST and txt.startswith("[photo] 📸 Evidence saved") for c, txt in BOT.sent)
+    s, body = t.json("POST", "/api/me/evidence", {"image_b64": base64.b64encode(b"not an image").decode()})
+    assert s == 400
+    s, body = x.json("POST", "/api/me/evidence", {"image_b64": base64.b64encode(png).decode(), "incident_id": sos_id})
+    assert s == 404, "can't attach evidence to someone else's incident"
+    ok("Photo evidence upload sealed on the ledger; non-images and other people's incidents refused")
+
+    # ── safety desk: zones & usage ──
+    s, body = o.json("GET", "/api/desk/usage")
+    assert s == 200 and {u["service"] for u in body["usage"]} == {"ai", "weather", "routing", "places"}
+    s, body = o.json("POST", "/api/desk/zones", {"name": "Test Cantonment", "risk": "restricted", "radius_m": 1500,
+                                                 "lat": 26.95, "lng": 75.80, "advisory": "No entry"})
+    assert s == 200 and body["zone"]["risk"] == "restricted"
+    zid = body["zone"]["id"]
+    s, body = anon.json("GET", "/api/desk/zones", headers={"X-TB-Token": "desk-token-xyz"})
+    assert any(z["id"] == zid for z in body["zones"])
+    s, body = o.json("POST", "/api/desk/zones", {"name": "Bad", "risk": "restricted", "radius_m": 10, "lat": 0, "lng": 0})
+    assert s == 400
+    s, _ = x.json("GET", "/api/desk/zones")
+    assert s == 403, "non-officers can't manage zones"
+    s, body = t.json("POST", "/api/me/location", {"lat": 26.95, "lng": 75.80})
+    assert any("Test Cantonment" in n for n in body["notes"]), body
+    s, _ = o.json("POST", f"/api/desk/zones/{zid}/remove")
+    s, body = o.json("GET", "/api/desk/zones")
+    assert not any(z["id"] == zid for z in body["zones"])
+    ok("Officer adds a zone (tourists alerted on entry), lists usage, removes it; strangers refused")
 
     # ── logout ──
     s, _ = t.json("POST", "/api/auth/logout")

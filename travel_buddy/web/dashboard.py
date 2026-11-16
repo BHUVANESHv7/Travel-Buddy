@@ -255,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             if not path.startswith("/api/"):
                 return self._send(404, "Not found", "text/plain")
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 64 * 1024:
+            if length > (9 * 1024 * 1024 if path == "/api/me/evidence" else 64 * 1024):
                 return self._send(413, json.dumps({"ok": False, "error": "Request too large."}), "application/json")
             # Browsers can't send this header cross-site without CORS approval → blocks form-based CSRF.
             if self.headers.get("X-Requested-With") != "TravelBuddy":

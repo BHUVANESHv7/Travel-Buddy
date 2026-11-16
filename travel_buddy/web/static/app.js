@@ -9,7 +9,8 @@
   const TYPES = [["medical", "🩺 Medical"], ["theft", "👜 Theft / loss"], ["harassment", "⚠️ Harassment"], ["accident", "🚗 Accident"],
     ["lost", "🧭 Lost / missing"], ["scam", "💸 Scam / fraud"], ["natural_hazard", "🌪️ Natural hazard"], ["other", "📝 Other"]];
 
-  const S = { me: null, ov: null, family: null, tab: "home", notes: [], maps: {}, watch: null, lastSent: 0, loading: false };
+  const S = { me: null, ov: null, family: null, tab: "home", notes: [], maps: {}, watch: null, lastSent: 0, loading: false,
+              chat: [], phrases: null, prefs: null, prefsLoaded: false, editPrefs: false, lang: null };
 
   // ───────────── helpers ─────────────
   async function api(method, url, data) {
@@ -106,6 +107,7 @@
     $$("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     if (push) { history.replaceState(null, "", "#" + tab); window.scrollTo({ top: 0 }); }
     render();
+    if (tab === "assistant" && (!S.phrases || !S.prefsLoaded)) loadAssistant();
   }
   $("#tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); });
   window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if (t && t !== S.tab && S.ov) setTab(t, false); });
@@ -192,7 +194,14 @@
           <div class="field"><label>What happened?</label><select name="type">${TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
           <div class="field"><label>Describe it</label><textarea name="description" required maxlength="1000" placeholder="Where, when, anyone hurt?"></textarea></div>
           <label class="check"><input type="checkbox" name="use_location" checked> Attach my last known location</label>
-          <button class="btn" type="submit">Submit report</button></form></div>
+          <button class="btn" type="submit">Submit report</button></form>
+        <h2 style="margin-top:26px">📸 Photo evidence</h2><p class="sub">The photo's fingerprint is sealed on the ledger (proof it was never edited) and it's sent to your responders.</p>
+        <form class="form" id="f-evidence">
+          <div class="field"><label>Attach to</label><select name="incident_id"><option value="">Latest open incident (or a new one from the caption)</option>
+            ${list.filter(i => i.status !== "resolved").map(i => `<option value="${i.id}">#${i.id} ${esc(i.label)}</option>`).join("")}</select></div>
+          <div class="field"><label>Photo</label><input class="input" type="file" name="photo" accept="image/*" capture="environment" required></div>
+          <div class="field"><label>Caption</label><input class="input" name="caption" maxlength="500" placeholder="What does it show?"></div>
+          <button class="btn ghost" type="submit">Seal &amp; upload</button></form></div>
       <div class="card"><h2>Your incidents</h2><p class="sub">${list.length} on record</p>
         <div class="list">${list.length ? list.map(i => `
           <div class="row sev-${i.severity}"><div class="grow"><div class="t">#${i.id} ${esc(i.label)} <span class="pill ${i.severity}">${i.severity}</span> <span class="pill ${i.status}">${i.status}</span></div>
@@ -200,6 +209,44 @@
             ${i.description ? `<div class="d">${esc(i.description)}</div>` : ""}${i.advice ? `<div class="d">💡 ${esc(i.advice)}</div>` : ""}</div>
             <div class="acts"><a class="btn ghost xs" href="/api/incident/${i.id}/efir">📄 E-FIR</a>${i.status !== "resolved" ? `<button class="btn ok xs" data-act="resolve" data-id="${i.id}">Resolve</button>` : ""}</div></div>`).join("")
           : '<div class="empty"><span class="e">🙌</span>No incidents. Stay safe!</div>'}</div></div>
+    </div>`;
+  };
+
+  V.assistant = () => {
+    const ph = S.phrases, lang = S.lang || ph?.auto || "hindi";
+    const prefs = S.prefs;
+    return `
+    <div class="page-title"><div><h1>🤖 Assistant</h1><p>AI safety copilot, destination safety briefing, emergency phrases and a personal travel guide.</p></div></div>
+    <div class="grid g-2">
+      <div class="card span-2"><h2>💬 Safety copilot</h2><p class="sub">Ask anything. It knows your live location, zone, weather, nearby hotspots and trip.</p>
+        <div class="chat" id="chat">${S.chat.length ? S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join("")
+          : '<div class="msg bot">👋 Hi! Try “Is it safe to walk back to my hotel now?” or “What should I avoid around here at night?”</div>'}</div>
+        <form class="chat-form" id="f-ask"><input class="input" name="question" placeholder="Type your question…" autocomplete="off" maxlength="800" required>
+          <button class="btn" type="submit">Ask</button></form></div>
+
+      <div class="card"><h2>🛡️ Safety briefing</h2><p class="sub">Scams, risky areas, local hazards and emergency numbers for any destination.</p>
+        <form class="form" id="f-tips"><div class="field"><label>Place</label><input class="input" name="place" maxlength="80" placeholder="Leave empty for your trip / current area"></div>
+          <button class="btn" type="submit">Get briefing</button></form><div id="tips-out"></div></div>
+
+      <div class="card"><h2>🗣️ Emergency phrases</h2><p class="sub">Show these to a local person. Auto-picked for where you are.</p>
+        ${ph ? `<div class="field"><select id="lang">${Object.keys(ph.phrases).map(l => `<option value="${l}" ${l === lang ? "selected" : ""}>${l[0].toUpperCase() + l.slice(1)}</option>`).join("")}</select></div>
+          <div class="phrases">${ph.keys.map((k, i) => `<div class="phrase"><span>${esc(k)}</span><b>${esc(ph.phrases[lang][i])}</b></div>`).join("")}</div>`
+          : '<div class="p-loading"><div class="spinner"></div></div>'}
+        <form class="form" id="f-translate" style="margin-top:14px"><div class="two"><div class="field"><label>Any language</label><input class="input" name="language" placeholder="e.g. Assamese" maxlength="30" required></div>
+          <div class="field"><label>Phrase</label><input class="input" name="text" placeholder="Where is the police station?" maxlength="200" required></div></div>
+          <button class="btn ghost" type="submit">Translate with AI</button></form><div id="tr-out"></div></div>
+
+      <div class="card span-2"><h2>🧭 Travel guide</h2>
+        ${prefs && !S.editPrefs ? `<p class="sub">Personalised for <b>${esc(prefs.interests)}</b> · ${esc(prefs.budget_level)} budget · ${esc(prefs.pace)} pace
+            <button class="link-btn" data-act="edit-prefs">Edit</button></p>
+          <form class="chat-form" id="f-explore"><input class="input" name="query" placeholder="e.g. best street food nearby, hidden gems, what to see today" maxlength="300" required>
+            <button class="btn" type="submit">Explore</button></form><div id="explore-out"></div>`
+        : `<p class="sub">Tell us your travel style once, then ask for recommendations anytime.</p>
+          <form class="form" id="f-prefs"><div class="field"><label>Interests</label><input class="input" name="interests" required maxlength="120"
+              value="${esc(prefs?.interests || "")}" placeholder="e.g. food, history, nature"></div>
+            <div class="two"><div class="field"><label>Budget</label><select name="budget_level">${["low", "medium", "high"].map(b => `<option ${prefs?.budget_level === b ? "selected" : ""}>${b}</option>`).join("")}</select></div>
+              <div class="field"><label>Pace</label><select name="pace">${["relaxed", "packed"].map(p => `<option ${prefs?.pace === p ? "selected" : ""}>${p}</option>`).join("")}</select></div></div>
+            <button class="btn" type="submit">Save preferences</button></form>`}</div>
     </div>`;
   };
 
@@ -317,6 +364,7 @@
     });
     bindSOS();
     bindForms();
+    bindAssistant();
   }
 
   // ───────────── actions ─────────────
@@ -389,6 +437,95 @@
     ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, stop));
     b.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && !e.repeat) start(e); });
     b.addEventListener("keyup", stop);
+  }
+
+  async function loadAssistant() {
+    try {
+      const [ph, pr] = await Promise.all([api("GET", "/api/me/phrases"), api("GET", "/api/me/preferences")]);
+      S.phrases = ph; S.prefs = pr.preferences; S.prefsLoaded = true;
+      if (S.tab === "assistant") render();
+    } catch (e) { toast(esc(e.message), "bad"); }
+  }
+
+  function pushChat(who, html) {
+    S.chat.push({ who, html });
+    S.chat = S.chat.slice(-30);
+    const box = $("#chat");
+    if (box) { box.innerHTML = S.chat.map(m => `<div class="msg ${m.who}">${m.html}</div>`).join(""); box.scrollTop = box.scrollHeight; }
+  }
+
+  // Shrink photos in the browser before upload (keeps uploads small and fast).
+  const shrinkImage = (file, max = 1600) => new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("That file isn't a readable image.")); };
+    img.src = url;
+  });
+
+  function bindAssistant() {
+    const ask = $("#f-ask");
+    if (ask) {
+      $("#chat").scrollTop = 1e6;
+      ask.addEventListener("submit", e => {
+        e.preventDefault();
+        const q = ask.question.value.trim(); if (!q) return;
+        ask.question.value = "";
+        pushChat("me", esc(q));
+        pushChat("bot typing", "<span class=\"dots\"><i></i><i></i><i></i></span>");
+        run(ask.querySelector("[type=submit]"), async () => {
+          try {
+            const r = await api("POST", "/api/me/ask", { question: q });
+            S.chat.pop();
+            pushChat(r.distress ? "bot alert" : "bot", r.html);
+          } catch (err) { S.chat.pop(); pushChat("bot", "⚠️ " + esc(err.message)); }
+        });
+      });
+    }
+    const tips = $("#f-tips");
+    if (tips) tips.addEventListener("submit", e => { e.preventDefault(); run(tips.querySelector("[type=submit]"), async () => {
+      $("#tips-out").innerHTML = '<div class="p-loading"><div class="spinner"></div>Preparing briefing…</div>';
+      const r = await api("POST", "/api/me/safetytips", formData(tips));
+      $("#tips-out").innerHTML = `<div class="ai-out"><div class="muted" style="margin-bottom:6px">📍 ${esc(r.place)}</div>${r.html}</div>`;
+    }).finally(() => { if ($("#tips-out .p-loading")) $("#tips-out").innerHTML = ""; }); });
+    const lang = $("#lang");
+    if (lang) lang.addEventListener("change", () => { S.lang = lang.value; render(); });
+    const tr = $("#f-translate");
+    if (tr) tr.addEventListener("submit", e => { e.preventDefault(); run(tr.querySelector("[type=submit]"), async () => {
+      const r = await api("POST", "/api/me/phrases/translate", formData(tr));
+      $("#tr-out").innerHTML = `<div class="phrase big"><span>${esc(r.text)} → ${esc(r.language)}</span><b>${esc(r.result)}</b></div>`;
+    }); });
+    const prefs = $("#f-prefs");
+    if (prefs) prefs.addEventListener("submit", e => { e.preventDefault(); run(prefs.querySelector("[type=submit]"), async () => {
+      const r = await api("POST", "/api/me/preferences", formData(prefs));
+      S.prefs = r.preferences; S.editPrefs = false; toast("✅ Preferences saved.", "ok"); render();
+    }); });
+    const ex = $("#f-explore");
+    if (ex) ex.addEventListener("submit", e => { e.preventDefault(); run(ex.querySelector("[type=submit]"), async () => {
+      $("#explore-out").innerHTML = '<div class="p-loading"><div class="spinner"></div>Searching fresh local info…</div>';
+      try {
+        const r = await api("POST", "/api/me/explore", formData(ex));
+        $("#explore-out").innerHTML = `<div class="ai-out">${r.context ? `<div class="muted" style="margin-bottom:6px">📍 Guide for ${esc(r.context)}</div>` : ""}${r.html}</div>`;
+      } catch (err) { $("#explore-out").innerHTML = ""; throw err; }
+    }); });
+    const ev = $("#f-evidence");
+    if (ev) ev.addEventListener("submit", e => { e.preventDefault(); run(ev.querySelector("[type=submit]"), async () => {
+      const file = ev.photo.files[0];
+      if (!file) throw new Error("Choose a photo first.");
+      const image_b64 = await shrinkImage(file);
+      const r = await api("POST", "/api/me/evidence", { image_b64, caption: ev.caption.value, incident_id: ev.incident_id.value || null });
+      await refresh(false);
+      dialog(`<h2>🔐 Evidence sealed</h2><p>${r.created ? "New incident" : "Attached to incident"} <b>#${r.incident.id}</b> · ${esc(r.incident.label)}</p>
+        <div class="note">SHA-256 <code>${esc(r.sha256.slice(0, 32))}…</code><br>Sealed in ledger block #${r.block_index} · sent to ${r.forwarded} responder(s)</div>
+        <p class="muted" style="margin-top:12px">This fingerprint proves the photo hasn't been altered: useful for the police and insurance.</p>`,
+        [["Download E-FIR", ""], ["Close", "ghost"]]).then(i => { if (i === 0) location.href = `/api/incident/${r.incident.id}/efir`; });
+    }); });
   }
 
   function formData(f) { const d = Object.fromEntries(new FormData(f)); $$("input[type=checkbox]", f).forEach(c => d[c.name] = c.checked); return d; }
@@ -498,6 +635,7 @@
     else if (act === "id-revoke") dialog("<h2>Revoke your Digital ID?</h2><p>The revocation is recorded on the ledger. You can issue a new ID afterwards.</p>",
       [["Revoke", "danger"], ["Keep it", "ghost"]]).then(i => { if (i === 0) run(null, async () => { await api("POST", "/api/me/id/revoke"); toast("ID revoked.", "ok"); S.me = await api("GET", "/api/me"); renderHeader(); await refresh(false); }); });
     else if (act === "guard-remove") run(b, async () => { await api("POST", `/api/me/guardians/${id}/remove`); toast("Guardian removed.", "ok"); await refresh(false); });
+    else if (act === "edit-prefs") { S.editPrefs = true; render(); }
     else if (act === "copy") { const i = b.previousElementSibling; i.select(); navigator.clipboard?.writeText(i.value); b.textContent = "Copied ✓"; }
   });
 
@@ -509,7 +647,7 @@
       const want = (location.hash || "#home").slice(1);
       S.ov = await api("GET", "/api/me/overview");
       if (S.me.guarding) S.family = (await api("GET", "/api/family")).people;
-      setTab(["home", "trip", "incidents", "id", "guardians", "family", "settings"].includes(want) ? want : "home", false);
+      setTab(["home", "trip", "incidents", "assistant", "id", "guardians", "family", "settings"].includes(want) ? want : "home", false);
     } catch (e) {
       $("#view").innerHTML = `<div class="empty"><span class="e">⚠️</span>${esc(e.message)}</div>`;
     }

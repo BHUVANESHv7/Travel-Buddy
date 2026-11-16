@@ -327,6 +327,7 @@ def command_html(token: str) -> str:
         <button class="tab" data-tab="tourists" role="tab">Tourists <span class="count" id="c-tourists">0</span></button>
         <button class="tab" data-tab="hotspots" role="tab">Hotspots <span class="count" id="c-hotspots">0</span></button>
         <button class="tab" data-tab="activity" role="tab">Activity</button>
+        <button class="tab" data-tab="desk" role="tab">Desk</button>
       </div>
       <div class="tools">
         <input class="search" id="search" placeholder="Search name, TID, type…" aria-label="Search">
@@ -418,6 +419,7 @@ def app_html() -> str:
     <button data-tab="home" class="active">🛡️<span>Safety</span></button>
     <button data-tab="trip">🚆<span>Trip</span></button>
     <button data-tab="incidents">🚨<span>Incidents</span></button>
+    <button data-tab="assistant">🤖<span>Assistant</span></button>
     <button data-tab="id">🪪<span>My ID</span></button>
     <button data-tab="guardians">👨‍👩‍👧<span>Guardians</span></button>
     <button data-tab="family" id="family-tab" hidden>👪<span>Family</span></button>

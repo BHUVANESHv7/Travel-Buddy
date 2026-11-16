@@ -7,6 +7,7 @@ The bot passes `message.reply_html`; the website passes a collector and shows th
 messages in the browser. One implementation → identical behaviour on both channels.
 """
 
+import hashlib
 import json
 import logging
 import secrets
@@ -307,3 +308,68 @@ async def build_efir_text(inc: dict) -> str:
         "NOTE: This is a draft to help you file a complaint. Submit it at the nearest police station",
         "or through the state police online portal.",
     ])
+
+
+# ─────────────────────────────────────────────
+#  Photo evidence (shared by Telegram photos and web uploads)
+# ─────────────────────────────────────────────
+
+EVIDENCE_WINDOW_S = 24 * 3600
+
+
+async def evidence_target(uid: int) -> dict | None:
+    """The user's most recent open incident from the last 24 h (photos attach to it by default)."""
+    for inc in await get_open_user_incidents(uid):
+        try:
+            age = time.time() - datetime.fromisoformat(inc["created_at"]).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            age = 0
+        if age <= EVIDENCE_WINDOW_S and inc["incident_type"] != "no_response":
+            return inc
+    return None
+
+
+async def add_photo_evidence(bot, uid: int, data: bytes, caption: str = "", file_id: str | None = None,
+                             incident: dict | None = None) -> dict:
+    """Seal a photo's SHA-256 on the ledger, attach it to an incident and forward it to responders.
+
+    incident: attach to this one; otherwise the latest open incident (24 h); otherwise a new
+    incident is opened from the caption (AI triage). file_id: the photo already on Telegram;
+    if None (web upload) the photo is first sent to the user's own chat to obtain one.
+    """
+    from travel_buddy.ai.triage import classify_incident
+    from travel_buddy.safety.incidents import SEVERITY_EMOJI, forward_media
+    from travel_buddy.safety.store import add_evidence
+
+    caption = (caption or "").strip()[:500]
+    target = incident or await evidence_target(uid)
+    created = False
+    if target is None:
+        if len(caption) < 3:
+            raise ValueError("Add a short caption describing what happened, so a new incident can be opened.")
+        state = await get_safety_state(uid)
+        triage = await classify_incident(caption)
+        target = await raise_incident(bot, uid, triage["category"], triage["severity"], caption,
+                                      state["last_lat"], state["last_lng"], source="photo", ai_advice=triage["advice"])
+        created = True
+
+    label = f"{SEVERITY_EMOJI.get(target['severity'], '')} {TYPE_LABEL.get(target['incident_type'], target['incident_type'])}"
+    digest = hashlib.sha256(data).hexdigest()
+    if file_id is None:
+        try:
+            msg = await bot.send_photo(uid, photo=data, caption=f"📸 Evidence saved from the web portal · incident "
+                                                               f"#{target['incident_id']} ({label})")
+            file_id = msg.photo[-1].file_id if msg and getattr(msg, "photo", None) else None
+        except Exception as exc:
+            logger.warning("Could not upload web evidence to Telegram: %s", exc)
+        file_id = file_id or f"web:{digest}"
+
+    block = await append_block("EVIDENCE", {"incident_id": target["incident_id"], "kind": "photo", "sha256": digest})
+    await add_evidence(target["incident_id"], uid, "photo", file_id, digest, caption or None, block["hash"])
+    forwarded = 0
+    if (target["severity"] != "low" or target["incident_type"] == "sos") and not file_id.startswith("web:"):
+        forwarded = await forward_media(bot, uid, "photo", file_id,
+                                        f"📸 Evidence for incident #{target['incident_id']} ({label})"
+                                        + (f"\n“{escape(caption[:300])}”" if caption else ""))
+    return {"incident": target, "created": created, "sha256": digest,
+            "block_index": block["block_index"], "forwarded": forwarded}
